@@ -1992,7 +1992,10 @@ const Tag = ({ label, color = "#86efac" }) => {
 const priorityColor = { Alta: "#ef4444", Media: "#f59e0b", Baja: "#6b7280" };
 
 export default function DeckAnalysis() {
-  const [tab, setTab] = useState("input");
+  const [tab, setTab] = useState("home");
+  const [theme, setTheme] = useState(() => {
+    try { return window.localStorage.getItem("commanderDeckAnalyzer.theme.v1") || "dark"; } catch { return "dark"; }
+  });
   const [deckText, setDeckText] = useState(STARTING_TEXT);
   const [cards, setCards] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -2116,6 +2119,7 @@ export default function DeckAnalysis() {
   }, [cards, activeFilter, cardSearch, typeFilter, roleFilter]);
 
   const tabs = [
+    { id: "home", label: "🏠 Inicio" },
     { id: "decks", label: "📚 Decks" },
     { id: "input", label: "🧾 Input" },
     { id: "overview", label: "📊 Overview" },
@@ -2130,18 +2134,42 @@ export default function DeckAnalysis() {
     { id: "cards", label: "🖼️ Cartas" },
   ];
 
-  const bg = {
-    page: "linear-gradient(160deg, #050d05 0%, #0a160a 60%, #050d05 100%)",
-    card: "#0c180c",
-    cardBorder: "#1a2e1a",
+  const isLightTheme = theme === "light";
+  const bg = isLightTheme ? {
+    page: "linear-gradient(160deg, #eef8ef 0%, #f8fafc 45%, #ecfeff 100%)",
+    card: "rgba(255,255,255,0.86)",
+    cardBorder: "rgba(20,83,45,0.18)",
+    text: "#102016",
+    muted: "#64748b",
+    header: "linear-gradient(135deg, rgba(255,255,255,0.92) 0%, rgba(236,253,245,0.92) 55%, rgba(219,234,254,0.88) 100%)",
+    nav: "rgba(255,255,255,0.78)",
+    navText: "#0f172a",
+    panel: "rgba(255,255,255,0.72)",
+    input: "#ffffff",
+    heroText: "#0f172a",
+    shadow: "0 18px 60px rgba(15,23,42,0.10)",
+  } : {
+    page: "radial-gradient(circle at 20% 0%, rgba(34,197,94,0.16) 0%, transparent 28%), radial-gradient(circle at 80% 15%, rgba(59,130,246,0.12) 0%, transparent 25%), linear-gradient(160deg, #030806 0%, #071407 52%, #05070c 100%)",
+    card: "rgba(12,24,12,0.86)",
+    cardBorder: "rgba(34,197,94,0.18)",
     text: "#e2f0e2",
-    muted: "#6b7280",
-    header: "linear-gradient(135deg, #0d2b14 0%, #0d1a2b 100%)",
+    muted: "#94a3b8",
+    header: "linear-gradient(135deg, rgba(13,43,20,0.92) 0%, rgba(13,26,43,0.92) 100%)",
+    nav: "rgba(3,10,6,0.72)",
+    navText: "#e2f0e2",
+    panel: "rgba(5,13,5,0.72)",
+    input: "#050d05",
+    heroText: "#ffffff",
+    shadow: "0 18px 70px rgba(0,0,0,0.35)",
   };
 
   useEffect(() => {
     setSavedDecks(safeLoadSavedDecks());
   }, []);
+
+  useEffect(() => {
+    try { window.localStorage.setItem("commanderDeckAnalyzer.theme.v1", theme); } catch {}
+  }, [theme]);
 
   useEffect(() => {
     if (!deckName && commander?.name) setDeckName(commander.name);
@@ -2749,6 +2777,17 @@ export default function DeckAnalysis() {
     event.target.value = "";
   }
 
+  const dashboardDecks = useMemo(() => savedDecks.slice(0, 8), [savedDecks]);
+  const dashboardStats = useMemo(() => {
+    const count = savedDecks.length;
+    const avgOverall = count ? (savedDecks.reduce((a, d) => a + (Number(d.summary?.overall) || 0), 0) / count).toFixed(1) : "-";
+    const maxBracket = count ? Math.max(...savedDecks.map(d => Number(d.summary?.bracket) || 0)) : "-";
+    const latest = savedDecks[0]?.name || "Sin análisis guardados";
+    return { count, avgOverall, maxBracket, latest };
+  }, [savedDecks]);
+
+  const heroImage = commander?.image || commander?.smallImage || savedDecks[0]?.summary?.commanderImage || "";
+
   const statCards = [
     { label: "Cartas", value: cards.length ? String(totalCards) : "-", icon: "🃏", color: "#4ade80", sub: totalCards === 100 ? "Commander legal" : totalCards ? `${totalCards > 100 ? "Sobran" : "Faltan"} ${Math.abs(totalCards - 100)}` : "Sin mazo" },
     { label: "CMC Prom.", value: avgCMC, icon: "⚡", color: "#fbbf24", sub: "calculado del mazo" },
@@ -2813,7 +2852,52 @@ export default function DeckAnalysis() {
   }
 
   return (
-    <div style={{ background: bg.page, color: bg.text, fontFamily: "'Georgia', 'Times New Roman', serif", minHeight: "100vh", padding: "20px 16px" }}>
+    <div style={{ background: bg.page, color: bg.text, fontFamily: "Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif", minHeight: "100vh", padding: "18px 16px", transition: "background 0.25s ease, color 0.25s ease" }}>
+      <style>{`
+        .da-shell { max-width: 1540px; margin: 0 auto; }
+        .da-topbar { position: sticky; top: 10px; z-index: 80; backdrop-filter: blur(18px); }
+        .da-card-hover { transition: transform .18s ease, box-shadow .18s ease, border-color .18s ease; }
+        .da-card-hover:hover { transform: translateY(-4px); box-shadow: 0 18px 42px rgba(34,197,94,.16); border-color: rgba(34,197,94,.55) !important; }
+        .da-soft-button { transition: transform .15s ease, opacity .15s ease, border-color .15s ease; }
+        .da-soft-button:hover { transform: translateY(-1px); opacity: .94; }
+        @media (max-width: 900px) {
+          .da-hero-grid { grid-template-columns: 1fr !important; }
+          .da-dashboard-grid { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
+          .da-deck-grid { grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)) !important; }
+        }
+        @media (max-width: 620px) {
+          .da-dashboard-grid { grid-template-columns: 1fr !important; }
+          .da-topbar-inner { justify-content: center !important; }
+        }
+      `}</style>
+      <div className="da-shell">
+        <div className="da-topbar" style={{ background: bg.nav, border: `1px solid ${bg.cardBorder}`, borderRadius: 18, boxShadow: bg.shadow, padding: 10, marginBottom: 16 }}>
+          <div className="da-topbar-inner" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+            <button onClick={() => setTab("home")} className="da-soft-button" style={{ background: "transparent", color: bg.navText, border: "none", display: "flex", alignItems: "center", gap: 10, cursor: "pointer", fontWeight: 900, fontSize: 18 }}>
+              <span style={{ width: 34, height: 34, borderRadius: 12, background: "linear-gradient(135deg,#22c55e,#38bdf8)", display: "inline-flex", alignItems: "center", justifyContent: "center", color: "#061006", boxShadow: "0 0 22px rgba(34,197,94,.28)" }}>✦</span>
+              DeckForge Analyzer
+            </button>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "center" }}>
+              {[
+                ["home", "Inicio"],
+                ["decks", "Mis decks"],
+                ["input", "Deck Analyzer"],
+                ["combos", "Combos"],
+                ["recommendations", "Mejoras"],
+              ].map(([id, label]) => (
+                <button key={id} onClick={() => setTab(id)} className="da-soft-button" style={{ background: tab === id ? "linear-gradient(135deg,#16a34a,#0ea5e9)" : bg.panel, color: tab === id ? "#fff" : bg.navText, border: `1px solid ${tab === id ? "rgba(255,255,255,.22)" : bg.cardBorder}`, borderRadius: 999, padding: "8px 12px", cursor: "pointer", fontWeight: 800, fontSize: 13 }}>
+                  {label}
+                </button>
+              ))}
+            </div>
+            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+              <button onClick={resetAnalyzer} className="da-soft-button" style={{ background: "#16a34a", color: "#fff", border: "1px solid rgba(255,255,255,.2)", borderRadius: 999, padding: "8px 13px", cursor: "pointer", fontWeight: 900 }}>+ Nuevo análisis</button>
+              <button onClick={() => setTheme(theme === "dark" ? "light" : "dark")} className="da-soft-button" style={{ background: bg.panel, color: bg.navText, border: `1px solid ${bg.cardBorder}`, borderRadius: 999, padding: "8px 12px", cursor: "pointer", fontWeight: 900 }}>
+                {theme === "dark" ? "☀️ Día" : "🌙 Noche"}
+              </button>
+            </div>
+          </div>
+        </div>
       <style>{`
         .stat-card-clickable { transition: transform .18s ease, border-color .18s ease, box-shadow .18s ease, background .18s ease; }
         .stat-card-clickable:hover { transform: translateY(-2px); border-color: rgba(34,197,94,.85) !important; box-shadow: 0 0 30px rgba(34,197,94,.16) !important; background: #0f1f0f !important; }
@@ -2831,7 +2915,7 @@ export default function DeckAnalysis() {
           .header-score-box div:first-child { font-size: 32px !important; }
         }
       `}</style>
-      <div style={{ background: bg.header, borderRadius: 16, padding: "24px 28px", marginBottom: 20, border: "1px solid #22c55e44", boxShadow: "0 0 60px rgba(34,197,94,0.12), 0 0 0 1px #0a3a0a inset", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 16 }}>
+      <div style={{ display: tab === "home" ? "none" : "flex", background: bg.header, borderRadius: 16, padding: "24px 28px", marginBottom: 20, border: "1px solid #22c55e44", boxShadow: "0 0 60px rgba(34,197,94,0.12), 0 0 0 1px #0a3a0a inset", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 16 }}>
         <div style={{ display: "flex", gap: 16, alignItems: "center", minWidth: 0 }}>
           {commander?.smallImage || commander?.image ? (
             <div style={{ width: 82, height: 114, borderRadius: 10, overflow: "hidden", border: "1px solid #22c55e66", boxShadow: "0 0 28px rgba(34,197,94,0.22)", flex: "0 0 auto", background: "#020802" }}>
@@ -2899,6 +2983,98 @@ export default function DeckAnalysis() {
           <button key={t.id} onClick={() => setTab(t.id)} style={{ background: tab === t.id ? "#14532d" : "#0c180c", color: tab === t.id ? "#4ade80" : "#6b7280", border: `1px solid ${tab === t.id ? "#22c55e" : "#1a2e1a"}`, borderRadius: 8, padding: "8px 14px", cursor: "pointer", fontSize: 13, fontWeight: tab === t.id ? 700 : 400, transition: "all 0.2s", fontFamily: "inherit" }}>{t.label}</button>
         ))}
       </div>
+
+      {tab === "home" && (
+        <div style={{ display: "grid", gap: 18 }}>
+          <section className="da-hero-grid" style={{ position: "relative", overflow: "hidden", display: "grid", gridTemplateColumns: "1.25fr .75fr", gap: 18, background: bg.header, border: `1px solid ${bg.cardBorder}`, borderRadius: 28, padding: 28, boxShadow: bg.shadow }}>
+            {heroImage && <img src={heroImage} alt="Commander art" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover", opacity: isLightTheme ? 0.10 : 0.16, filter: "blur(2px) saturate(1.15)", pointerEvents: "none" }} />}
+            <div style={{ position: "relative", zIndex: 1 }}>
+              <div style={{ display: "inline-flex", gap: 8, alignItems: "center", background: isLightTheme ? "rgba(22,163,74,.10)" : "rgba(34,197,94,.12)", border: "1px solid rgba(34,197,94,.32)", color: "#22c55e", borderRadius: 999, padding: "7px 12px", fontWeight: 900, fontSize: 12, letterSpacing: 1.2, textTransform: "uppercase" }}>Commander · EDH · Deck Intelligence</div>
+              <h1 style={{ color: bg.heroText, fontSize: "clamp(36px, 6vw, 76px)", lineHeight: .95, letterSpacing: -2.2, margin: "18px 0 12px", fontWeight: 950 }}>
+                Analizá tu mazo como si fuera una review premium.
+              </h1>
+              <p style={{ color: bg.muted, maxWidth: 760, fontSize: 18, lineHeight: 1.65, margin: 0 }}>
+                Pegá una decklist de Archidekt, Moxfield o Manabox y obtené bracket, overall, combos, tokens, cartas a meter, cortes sugeridos, precio estimado y un reporte compartible.
+              </p>
+              <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginTop: 24 }}>
+                <button onClick={() => setTab("input")} className="da-soft-button" style={{ background: "linear-gradient(135deg,#16a34a,#22c55e)", color: "#fff", border: "none", borderRadius: 14, padding: "13px 18px", fontWeight: 950, cursor: "pointer", boxShadow: "0 12px 34px rgba(34,197,94,.22)" }}>Ir al Deck Analyzer</button>
+                <button onClick={() => setTab("decks")} className="da-soft-button" style={{ background: bg.panel, color: bg.navText, border: `1px solid ${bg.cardBorder}`, borderRadius: 14, padding: "13px 18px", fontWeight: 950, cursor: "pointer" }}>Ver mis análisis</button>
+                <button onClick={resetAnalyzer} className="da-soft-button" style={{ background: "transparent", color: "#22c55e", border: "1px solid rgba(34,197,94,.42)", borderRadius: 14, padding: "13px 18px", fontWeight: 950, cursor: "pointer" }}>Nuevo análisis limpio</button>
+              </div>
+            </div>
+            <div style={{ position: "relative", zIndex: 1, display: "grid", gap: 12, alignContent: "center" }}>
+              {[
+                ["Análisis guardados", dashboardStats.count, "📚"],
+                ["Overall promedio", dashboardStats.avgOverall, "⭐"],
+                ["Bracket máximo", dashboardStats.maxBracket, "🏷️"],
+                ["Último deck", dashboardStats.latest, "🕘"],
+              ].map(([label, value, icon]) => (
+                <div key={label} className="da-card-hover" style={{ background: bg.panel, border: `1px solid ${bg.cardBorder}`, borderRadius: 18, padding: 16, display: "flex", alignItems: "center", gap: 12 }}>
+                  <div style={{ fontSize: 24 }}>{icon}</div>
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ color: bg.muted, fontSize: 12, fontWeight: 800, textTransform: "uppercase", letterSpacing: .8 }}>{label}</div>
+                    <div style={{ color: bg.heroText, fontSize: String(value).length > 18 ? 16 : 26, fontWeight: 950, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{value}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </section>
+
+          <section style={{ display: "grid", gap: 14 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "end", gap: 12, flexWrap: "wrap" }}>
+              <div>
+                <h2 style={{ margin: 0, color: bg.heroText, fontSize: 28 }}>Mis análisis recientes</h2>
+                <p style={{ margin: "6px 0 0", color: bg.muted }}>Tus decks guardados aparecen como biblioteca visual. Después podemos llevar esto a usuarios reales con Supabase.</p>
+              </div>
+              <button onClick={() => setTab("decks")} className="da-soft-button" style={{ background: bg.panel, color: bg.navText, border: `1px solid ${bg.cardBorder}`, borderRadius: 12, padding: "10px 14px", cursor: "pointer", fontWeight: 900 }}>Ver todos →</button>
+            </div>
+            {dashboardDecks.length === 0 ? (
+              <div style={{ background: bg.card, border: `1px solid ${bg.cardBorder}`, borderRadius: 22, padding: 28, color: bg.muted, textAlign: "center" }}>
+                Todavía no guardaste análisis. Entrá al Deck Analyzer, pegá una decklist y tocá Guardar deck.
+              </div>
+            ) : (
+              <div className="da-deck-grid" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(240px, 1fr))", gap: 16 }}>
+                {dashboardDecks.map(deck => (
+                  <button key={deck.id} onClick={() => loadSavedDeck(deck)} className="da-card-hover" style={{ textAlign: "left", overflow: "hidden", background: bg.card, border: `1px solid ${bg.cardBorder}`, borderRadius: 20, padding: 0, cursor: "pointer", boxShadow: bg.shadow }}>
+                    <div style={{ height: 138, position: "relative", background: "linear-gradient(135deg,#14532d,#0f172a)" }}>
+                      {deck.summary?.commanderImage && <img src={deck.summary.commanderImage} alt={deck.commanderName} style={{ width: "100%", height: "100%", objectFit: "cover", opacity: .82 }} />}
+                      <div style={{ position: "absolute", inset: 0, background: "linear-gradient(180deg, transparent 10%, rgba(0,0,0,.78) 100%)" }} />
+                      <div style={{ position: "absolute", left: 12, right: 12, bottom: 10, display: "flex", justifyContent: "space-between", alignItems: "end", gap: 10 }}>
+                        <div style={{ color: "#fff", fontWeight: 950, fontSize: 17, lineHeight: 1.15, textShadow: "0 2px 10px rgba(0,0,0,.55)" }}>{deck.name}</div>
+                        <div style={{ display: "flex", gap: 6 }}>
+                          <span style={{ background: "rgba(245,158,11,.94)", color: "#111827", borderRadius: 9, padding: "4px 7px", fontWeight: 950, fontSize: 12 }}>{deck.summary?.overall || "-"}</span>
+                          <span style={{ background: "rgba(34,197,94,.94)", color: "#052e16", borderRadius: 9, padding: "4px 7px", fontWeight: 950, fontSize: 12 }}>B{deck.summary?.bracket || "-"}</span>
+                        </div>
+                      </div>
+                    </div>
+                    <div style={{ padding: 14 }}>
+                      <div style={{ color: bg.muted, fontSize: 12, marginBottom: 8 }}>{deck.commanderName}</div>
+                      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                        {(deck.summary?.archetypes || []).slice(0, 3).map(a => <Tag key={a} label={a} />)}
+                      </div>
+                      <div style={{ color: bg.muted, fontSize: 11, marginTop: 10 }}>Actualizado: {deck.updatedAt ? new Date(deck.updatedAt).toLocaleDateString() : "-"}</div>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            )}
+          </section>
+
+          <section className="da-dashboard-grid" style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 14 }}>
+            {[
+              ["Bracket explicado", "Detecta Game Changers, combos compactos, tutores, fast mana y locks para estimar experiencia de mesa.", "🏷️"],
+              ["Mejoras accionables", "Te sugiere cartas a meter y cortes según los roles flojos del deck y su identidad de color.", "🔧"],
+              ["Reporte compartible", "Copiá un resumen del análisis para Discord, WhatsApp o hablarlo antes de sentarte a jugar.", "📋"],
+            ].map(([title, text, icon]) => (
+              <div key={title} className="da-card-hover" style={{ background: bg.card, border: `1px solid ${bg.cardBorder}`, borderRadius: 20, padding: 20, boxShadow: bg.shadow }}>
+                <div style={{ fontSize: 28, marginBottom: 12 }}>{icon}</div>
+                <h3 style={{ margin: 0, color: bg.heroText, fontSize: 20 }}>{title}</h3>
+                <p style={{ margin: "8px 0 0", color: bg.muted, lineHeight: 1.55 }}>{text}</p>
+              </div>
+            ))}
+          </section>
+        </div>
+      )}
 
       {tab === "decks" && (
         <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 14 }}>
@@ -3877,8 +4053,9 @@ Mycoloth`}
       )}
 
       <div style={{ textAlign: "center", color: "#31503a", fontSize: 11, marginTop: 20, fontFamily: "monospace", lineHeight: 1.6 }}>
-        COMMANDER DECK ANALYZER · UNIVERSAL · DYNAMIC · v1.5<br />
+        DECKFORGE ANALYZER · DASHBOARD · UNIVERSAL · v1.6<br />
         Unofficial fan project. Not affiliated with Wizards of the Coast, Scryfall, EDHREC, Archidekt or Commander Spellbook.
+      </div>
       </div>
     </div>
   );

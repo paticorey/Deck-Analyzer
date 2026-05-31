@@ -1939,6 +1939,7 @@ export default function DeckAnalysis() {
   const [deckName, setDeckName] = useState("");
   const [savedDecks, setSavedDecks] = useState([]);
   const [saveStatus, setSaveStatus] = useState("");
+  const [reportStatus, setReportStatus] = useState("");
   const [comboView, setComboView] = useState("included");
   const [deckViewGroupBy, setDeckViewGroupBy] = useState("role");
   const [deckViewSortBy, setDeckViewSortBy] = useState("name");
@@ -1952,6 +1953,9 @@ export default function DeckAnalysis() {
   const [spellbookHasFetched, setSpellbookHasFetched] = useState(false);
   const [previewCard, setPreviewCard] = useState(null);
   const [previewPos, setPreviewPos] = useState({ x: 0, y: 0 });
+  const [selectedDiagnostic, setSelectedDiagnostic] = useState(null);
+  const [comboSizeFilter, setComboSizeFilter] = useState("all");
+  const [suggestionCardData, setSuggestionCardData] = useState({});
 
   const commander = useMemo(() => getCommander(cards), [cards]);
   const totalCards = useMemo(() => cards.reduce((a, c) => a + c.qty, 0), [cards]);
@@ -1983,7 +1987,10 @@ export default function DeckAnalysis() {
       .filter(c => !c.complete && c.pieces.length >= 2 && c.pieces.length <= 3 && c.missing.length === 1 && c.present.length >= c.pieces.length - 1)
       .sort((a, b) => a.missing.length - b.missing.length || b.present.length - a.present.length || a.name.localeCompare(b.name));
   }, [combos, spellbookAlmostCombos, spellbookHasFetched]);
-  const displayedCombos = comboView === "included" ? includedCombos : almostCombos;
+  const comboSource = comboView === "included" ? includedCombos : almostCombos;
+  const twoCardComboCount = comboSource.filter(c => c.pieces.length === 2).length;
+  const threeCardComboCount = comboSource.filter(c => c.pieces.length === 3).length;
+  const displayedCombos = comboSource.filter(c => comboSizeFilter === "all" || c.pieces.length === Number(comboSizeFilter));
   const autoAddRecommendations = useMemo(() => {
     const owned = new Set(cards.map(c => normalizeName(c.name)));
     const out = [];
@@ -2061,10 +2068,34 @@ export default function DeckAnalysis() {
     if (!deckName && commander?.name) setDeckName(commander.name);
   }, [commander, deckName]);
 
+  useEffect(() => {
+    let cancelled = false;
+    async function loadSuggestionImages() {
+      const wanted = [...autoAddRecommendations.map(x => x.name), ...selectedWantedCards].slice(0, 36);
+      for (const name of wanted) {
+        const key = normalizeName(name);
+        if (!key || suggestionCardData[key]) continue;
+        try {
+          const data = await fetchScryfallCard(name);
+          const scry = scryToCardData(data);
+          if (!cancelled) {
+            setSuggestionCardData(prev => ({ ...prev, [key]: { name: scry.name || name, image: scry.image, smallImage: scry.smallImage, typeLine: scry.typeLine, manaCost: scry.manaCost, price: scry.price } }));
+          }
+          await sleep(35);
+        } catch {
+          if (!cancelled) setSuggestionCardData(prev => ({ ...prev, [key]: { name, image: "", smallImage: "", typeLine: "" } }));
+        }
+      }
+    }
+    if (autoAddRecommendations.length || selectedWantedCards.length) loadSuggestionImages();
+    return () => { cancelled = true; };
+  }, [autoAddRecommendations, selectedWantedCards]);
+
   async function enrichCardsList(inputCards) {
     if (!inputCards.length) return inputCards;
     setLoading(true);
     const next = [...inputCards];
+    let failedLoads = 0;
     setCards([...next]);
     for (let i = 0; i < next.length; i++) {
       setLoadStatus(`Cargando Scryfall ${i + 1}/${next.length}: ${next[i].name}`);
@@ -2077,12 +2108,13 @@ export default function DeckAnalysis() {
         enriched.roles = detectRoles(enriched);
         next[i] = enriched;
       } catch {
+        failedLoads += 1;
         next[i] = { ...next[i], notFound: true };
       }
       setCards([...next]);
       await sleep(90);
     }
-    setLoadStatus("Datos Scryfall cargados");
+    setLoadStatus(failedLoads ? `Datos Scryfall cargados con ${failedLoads} carta(s) sin encontrar. Revisá nombres, edición o collector number.` : "Datos Scryfall cargados correctamente.");
     setLoading(false);
     return next;
   }
@@ -2179,6 +2211,77 @@ export default function DeckAnalysis() {
     a.download = `${(deck.name || "deck").replace(/[^a-z0-9]+/gi, "_")}_analysis.json`;
     a.click();
     URL.revokeObjectURL(url);
+  }
+
+  function resetAnalyzer() {
+    setDeckText(STARTING_TEXT);
+    setCards([]);
+    setLoading(false);
+    setLoadStatus("Nuevo análisis listo. Pegá una decklist para empezar.");
+    setWantedCards("");
+    setWantedSearch("");
+    setWantedSuggestions([]);
+    setSelectedWantedCards([]);
+    setWantedSearchStatus("");
+    setActiveFilter(null);
+    setCardSearch("");
+    setTypeFilter("Todos");
+    setRoleFilter("Todos");
+    setDeckName("");
+    setSaveStatus("");
+    setReportStatus("");
+    setSpellbookIncludedCombos([]);
+    setSpellbookAlmostCombos([]);
+    setSpellbookHasFetched(false);
+    setSpellbookStatus("Sin consultar Commander Spellbook");
+    setSelectedDiagnostic(null);
+    setComboSizeFilter("all");
+    setSuggestionCardData({});
+    setPreviewCard(null);
+    setTab("input");
+  }
+
+  function generateReportText() {
+    if (!cards.length) return "Pegá y analizá una decklist para generar un reporte.";
+    const topStrengths = strengths.slice(0, 4).map(x => `- ${x.title}: ${x.text}`).join(String.fromCharCode(10));
+    const topWeaknesses = weaknesses.slice(0, 4).map(x => `- ${x.title}: ${x.text}`).join(String.fromCharCode(10));
+    const topRecs = recommendations.slice(0, 5).map(x => `- ${x.area}: ${x.card} (${x.priority})`).join(String.fromCharCode(10));
+    const completeCombos = includedCombos.slice(0, 6).map(x => `- ${x.name}`).join(String.fromCharCode(10)) || "- No se detectaron combos completos de 2/3 cartas.";
+    return [
+      `Commander Deck Analyzer — Reporte`,
+      `Comandante: ${commander?.name || "No detectado"}`,
+      `Cartas: ${totalCards} · Tierras: ${landsCount} · CMC prom.: ${avgCMC}`,
+      `Arquetipo: ${archetypes[0]?.name || "No detectado"}`,
+      `Overall: ${scores.overall}/10`,
+      `Bracket estimado: ${bracket.bracket} (${bracket.shortLabel})`,
+      "",
+      "Plan de juego:",
+      planText,
+      "",
+      "Fortalezas:",
+      topStrengths || "- Sin fortalezas claras detectadas.",
+      "",
+      "Debilidades:",
+      topWeaknesses || "- Sin debilidades críticas detectadas.",
+      "",
+      "Combos incluidos:",
+      completeCombos,
+      "",
+      "Recomendaciones:",
+      topRecs || "- Sin recomendaciones críticas.",
+      "",
+      "Nota: bracket y score son estimaciones automáticas; conviene confirmar expectativas con la mesa antes de jugar."
+    ].join(String.fromCharCode(10));
+  }
+
+  async function copyReportToClipboard() {
+    const text = generateReportText();
+    try {
+      await navigator.clipboard.writeText(text);
+      setReportStatus("Reporte copiado al portapapeles.");
+    } catch {
+      setReportStatus("No se pudo copiar automáticamente. Seleccioná y copiá manualmente desde el navegador.");
+    }
   }
 
   function getDeckViewPrimaryRole(card) {
@@ -2446,7 +2549,7 @@ export default function DeckAnalysis() {
       setSpellbookStatus(`${result.source || "Commander Spellbook"}: ${result.included?.length || 0} incluidos, ${result.almost?.length || 0} a 1 carta.`);
     } catch (err) {
       setSpellbookHasFetched(false);
-      setSpellbookStatus(`No se pudo consultar Commander Spellbook. Usando base local. ${err?.message || ""}`);
+      setSpellbookStatus(`No se pudo conectar con Commander Spellbook. Se está usando la base local reducida. ${err?.message || ""}`);
     } finally {
       setSpellbookLoading(false);
     }
@@ -2476,6 +2579,80 @@ export default function DeckAnalysis() {
 
   function removeWantedCard(name) {
     setSelectedWantedCards(prev => prev.filter(x => normalizeName(x) !== normalizeName(name)));
+  }
+
+  function getDiagnosticDetail(subject) {
+    const components = scores.components || {};
+    const roleCount = role => getRoleCount(cards, role);
+    const cardNamesForRoles = (roleList, limit = 10) => {
+      const found = [];
+      for (const card of cards) {
+        const cardRoles = detectRoles(card);
+        if (roleList.some(role => cardRoles.includes(role))) found.push(`${card.qty}x ${card.name}`);
+      }
+      return found.slice(0, limit);
+    };
+    const compact = detectCombos(cards).filter(c => c.complete && c.pieces.length <= 2);
+    const archetype = detectArchetypes(cards)[0]?.name || "Value / Goodstuff";
+    const details = {
+      "Manabase": {
+        title: "Manabase",
+        goal: `Objetivo estimado: ${components.landTarget || "?"} tierras según curva/arquetipo`,
+        why: `Tenés ${landsCount} tierras y CMC promedio ${avgCMC}. La app compara si la cantidad de tierras acompaña la curva del mazo.`,
+        formula: "Puntúa mejor cuando la cantidad de tierras está cerca del objetivo. Penaliza si está demasiado baja o demasiado alta.",
+        cards: cards.filter(c => c.type === "Tierras").slice(0, 12).map(c => `${c.qty}x ${c.name}`),
+      },
+      "Ramp": {
+        title: "Ramp",
+        goal: `Objetivo estimado: ${components.rampTarget || "?"} piezas de ramp`,
+        why: `Se detectaron ${roleCount("Ramp")} piezas de ramp. El objetivo sube si el mazo es Big Mana o tiene curva alta.`,
+        formula: "Ramp bajo baja consistencia; ramp suficiente permite ejecutar el plan antes y sostener costes altos.",
+        cards: cardNamesForRoles(["Ramp"], 14),
+      },
+      "Card Draw": {
+        title: "Card Draw",
+        goal: `Objetivo estimado: ${components.drawTarget || "?"} fuentes de robo/ventaja`,
+        why: `Se detectaron ${roleCount("Draw")} fuentes de draw. La app cuenta robo directo, clues/investigate y motores de ventaja.`,
+        formula: "El score sube con fuentes repetibles o suficientes fuentes puntuales para no quedarte sin mano.",
+        cards: cardNamesForRoles(["Draw"], 14),
+      },
+      "Interacción": {
+        title: "Interacción",
+        goal: `Objetivo estimado: ${components.interactionTarget || "?"} respuestas`,
+        why: `Se detectaron ${roleCount("Removal") + roleCount("Counterspell") + roleCount("Board Wipe")} respuestas entre removal, counters y wipes.`,
+        formula: "Mezcla removal puntual + algún wipe + respuestas flexibles. Penaliza si el mazo no puede frenar amenazas rivales.",
+        cards: cardNamesForRoles(["Removal", "Counterspell", "Board Wipe"], 16),
+      },
+      "Win Cons": {
+        title: "Win Cons",
+        goal: "Objetivo estimado: 4-6 formas reales de cerrar partida, según arquetipo",
+        why: `Se detectaron ${roleCount("Finisher")} finishers, ${roleCount("Drain")} piezas de drain y ${compact.length} combo(s) compacto(s).`,
+        formula: "Cuenta finishers, drain real, combos compactos y cartas que convierten ventaja en victoria. No todo value cuenta como wincon.",
+        cards: [...cardNamesForRoles(["Finisher", "Drain", "Combo"], 14), ...compact.map(c => `Combo: ${c.name}`)].slice(0, 16),
+      },
+      "Sinergia": {
+        title: "Sinergia",
+        goal: `Arquetipo principal detectado: ${archetype}`,
+        why: `La app mira si los roles principales se refuerzan entre sí. Motores detectados: ${synergyLines.length}.`,
+        formula: "Sube cuando hay densidad de piezas que trabajan juntas: tokens + sac outlet + drain, spellslinger + cantrips, counters + proliferate, etc.",
+        cards: synergyLines.flatMap(line => [line.name, ...(line.pieces || [])]).slice(0, 16),
+      },
+      "Consistencia": {
+        title: "Consistencia",
+        goal: "Que el mazo repita su plan en varias partidas",
+        why: `Se calcula con ramp (${roleCount("Ramp")}), draw (${roleCount("Draw")}), curva (${avgCMC}) y combos compactos (${compact.length}).`,
+        formula: "Sube con ramp, draw, curva razonable, tutores o redundancia de piezas. Baja si depende demasiado de robar una sola carta.",
+        cards: cardNamesForRoles(["Ramp", "Draw", "Tutor"], 16),
+      },
+      "Resiliencia": {
+        title: "Resiliencia",
+        goal: `Objetivo estimado: ${components.protectionTarget || "?"} protecciones si el comandante/motor es central`,
+        why: `Se detectaron ${roleCount("Protection")} protecciones y ${roleCount("Recursion") + roleCount("Reanimator")} piezas de recursión/reanimación.`,
+        formula: "Sube si puede proteger comandante, reconstruir tras wipe o recuperar piezas clave del cementerio.",
+        cards: cardNamesForRoles(["Protection", "Recursion", "Reanimator"], 16),
+      },
+    };
+    return details[subject] || details["Consistencia"];
   }
 
   function handleDeckFileUpload(event) {
@@ -2555,6 +2732,12 @@ export default function DeckAnalysis() {
         .deck-column-scroll::-webkit-scrollbar { height: 10px; width: 10px; }
         .deck-column-scroll::-webkit-scrollbar-thumb { background: #14532d; border-radius: 999px; }
         .deck-column-scroll::-webkit-scrollbar-track { background: #020802; border-radius: 999px; }
+        @media (max-width: 900px) {
+          .main-stat-grid { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
+          .input-grid { grid-template-columns: 1fr !important; }
+          .header-score-box { min-width: 92px !important; padding: 12px 14px !important; }
+          .header-score-box div:first-child { font-size: 32px !important; }
+        }
       `}</style>
       <div style={{ background: bg.header, borderRadius: 16, padding: "24px 28px", marginBottom: 20, border: "1px solid #22c55e44", boxShadow: "0 0 60px rgba(34,197,94,0.12), 0 0 0 1px #0a3a0a inset", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 16 }}>
         <div style={{ display: "flex", gap: 16, alignItems: "center", minWidth: 0 }}>
@@ -2588,21 +2771,26 @@ export default function DeckAnalysis() {
               <button onClick={saveCurrentDeck} style={{ width: "100%", background: "#14532d", color: "#86efac", border: "1px solid #22c55e", borderRadius: 8, padding: "7px 10px", cursor: "pointer", fontWeight: 800 }}>
                 Guardar deck
               </button>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, marginTop: 7 }}>
+                <button onClick={copyReportToClipboard} style={{ background: "#0d2b14", color: "#d1fae5", border: "1px solid #14532d", borderRadius: 8, padding: "7px 8px", cursor: "pointer", fontSize: 11, fontWeight: 800 }}>Copiar reporte</button>
+                <button onClick={resetAnalyzer} style={{ background: "#2a160a", color: "#fed7aa", border: "1px solid #7c2d12", borderRadius: 8, padding: "7px 8px", cursor: "pointer", fontSize: 11, fontWeight: 800 }}>Nuevo análisis</button>
+              </div>
               {saveStatus && <div style={{ color: "#94a3b8", fontSize: 11, marginTop: 6 }}>{saveStatus}</div>}
+              {reportStatus && <div style={{ color: "#86efac", fontSize: 11, marginTop: 4 }}>{reportStatus}</div>}
             </div>
           )}
-          <div className="stat-card-clickable" onClick={() => handleStatCardClick("Overall")} title="Ver diagnóstico completo del overall" style={{ background: "rgba(0,0,0,0.5)", borderRadius: 14, padding: "14px 24px", textAlign: "center", border: "2px solid #f59e0b55", cursor: "pointer" }}>
+          <div className="stat-card-clickable header-score-box" onClick={() => handleStatCardClick("Overall")} title="Ver diagnóstico completo del overall" style={{ background: "rgba(0,0,0,0.5)", borderRadius: 14, padding: "14px 24px", textAlign: "center", border: "2px solid #f59e0b55", cursor: "pointer" }}>
             <div style={{ fontSize: 42, fontWeight: 900, color: "#f59e0b", lineHeight: 1, fontFamily: "monospace" }}>{cards.length ? scores.overall : "-"}</div>
             <div style={{ fontSize: 10, color: "#fbbf24", marginTop: 4, letterSpacing: 2, textTransform: "uppercase" }}>Overall /10</div>
           </div>
-          <div className="stat-card-clickable" onClick={() => handleStatCardClick("Bracket")} title="Ver explicación completa del bracket" style={{ background: "rgba(0,0,0,0.5)", borderRadius: 14, padding: "14px 24px", textAlign: "center", border: "2px solid #22c55e55", cursor: "pointer" }}>
+          <div className="stat-card-clickable header-score-box" onClick={() => handleStatCardClick("Bracket")} title="Ver explicación completa del bracket" style={{ background: "rgba(0,0,0,0.5)", borderRadius: 14, padding: "14px 24px", textAlign: "center", border: "2px solid #22c55e55", cursor: "pointer" }}>
             <div style={{ fontSize: 42, fontWeight: 900, color: "#4ade80", lineHeight: 1, fontFamily: "monospace" }}>{cards.length ? bracket.bracket : "-"}</div>
             <div style={{ fontSize: 10, color: "#86efac", marginTop: 4, letterSpacing: 2, textTransform: "uppercase" }}>Bracket</div>
           </div>
         </div>
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(6, minmax(0, 1fr))", gap: 10, marginBottom: 20 }}>
+      <div className="main-stat-grid" style={{ display: "grid", gridTemplateColumns: "repeat(6, minmax(0, 1fr))", gap: 10, marginBottom: 20 }}>
         {statCards.map(s => (
           <div key={s.label} className="stat-card-clickable" onClick={() => handleStatCardClick(s.label)} title={getStatCardHint(s.label)} style={{ background: bg.card, border: `1px solid ${s.color}22`, borderRadius: 12, padding: "14px 10px", textAlign: "center", boxShadow: `0 0 20px ${s.color}08`, cursor: "pointer", userSelect: "none" }}>
             <div style={{ fontSize: 22 }}>{s.icon}</div>
@@ -2703,11 +2891,16 @@ export default function DeckAnalysis() {
       )}
 
       {tab === "input" && (
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1.4fr", gap: 14 }}>
+        <div className="input-grid" style={{ display: "grid", gridTemplateColumns: "1fr 1.4fr", gap: 14 }}>
           <div style={{ background: bg.card, borderRadius: 12, padding: 20, border: `1px solid ${bg.cardBorder}` }}>
             <h3 style={{ color: "#86efac", margin: "0 0 12px", fontSize: 14 }}>Cómo usar</h3>
             <p style={{ color: "#94a3b8", lineHeight: 1.6, fontSize: 13 }}>Pegá una decklist de Archidekt, Moxfield, Manabox, Arena o similar. Acepta encabezados, CSV/JSON exportado, cantidades, tags manuales y edición con collector number.</p>
-            <div style={{ background: "#071207", border: "1px solid #14532d", borderRadius: 10, padding: 12, color: "#94a3b8", fontSize: 12, lineHeight: 1.6 }}>
+            <div style={{ background: "#071207", border: "1px solid #14532d", borderRadius: 10, padding: 12, color: "#94a3b8", fontSize: 12, lineHeight: 1.65 }}>
+              <b style={{ color: "#86efac" }}>Flujo recomendado:</b><br />
+              1. Exportá tu mazo desde Archidekt/Moxfield/Manabox.<br />
+              2. Pegalo a la derecha o subí el archivo.<br />
+              3. Tocá <b style={{ color: "#d1fae5" }}>Analizar decklist</b> y esperá que cargue Scryfall.<br />
+              4. Revisá Overview, Bracket, Combos, Mejoras y Meter cartas.<br /><br />
               <b style={{ color: "#86efac" }}>Formatos válidos:</b><br />
               1 Sol Ring<br />
               1x Sol Ring (CMM) 703 [Ramp]<br />
@@ -2720,6 +2913,7 @@ export default function DeckAnalysis() {
             </label>
             <button onClick={analyzeDeck} disabled={loading || !deckText.trim()} style={{ width: "100%", marginTop: 12, background: loading ? "#1f2937" : "#14532d", color: "#86efac", border: "1px solid #22c55e", borderRadius: 10, padding: 12, cursor: loading ? "not-allowed" : "pointer", fontWeight: 800 }}>{loading ? "Analizando decklist..." : "Analizar decklist"}</button>
             <button onClick={enrichScryfall} disabled={!cards.length || loading} style={{ width: "100%", marginTop: 10, background: loading ? "#1f2937" : "#0d2b14", color: "#d1fae5", border: "1px solid #14532d", borderRadius: 10, padding: 12, cursor: loading ? "not-allowed" : "pointer", fontWeight: 800 }}>Recargar datos Scryfall</button>
+            <button onClick={resetAnalyzer} style={{ width: "100%", marginTop: 10, background: "#2a160a", color: "#fed7aa", border: "1px solid #7c2d12", borderRadius: 10, padding: 12, cursor: "pointer", fontWeight: 800 }}>Nuevo análisis / limpiar</button>
             <div style={{ color: loading ? "#fbbf24" : "#6b7280", fontSize: 12, marginTop: 10 }}>{loadStatus}</div>
           </div>
           <div style={{ background: bg.card, borderRadius: 12, padding: 20, border: `1px solid ${bg.cardBorder}` }}>
@@ -2909,10 +3103,6 @@ export default function DeckAnalysis() {
                 <div style={{ color: "#fff", fontSize: 28, fontFamily: "monospace", fontWeight: 900 }}>{manaStats.avgManaValue}</div>
               </div>
               <div style={{ background: "#071207", border: "1px solid #14532d", borderRadius: 12, padding: 14 }}>
-                <div style={{ color: "#86efac", fontWeight: 900 }}>Total Mana Value</div>
-                <div style={{ color: "#fff", fontSize: 28, fontFamily: "monospace", fontWeight: 900 }}>{manaStats.totalManaValue.toFixed(0)}</div>
-              </div>
-              <div style={{ background: "#071207", border: "1px solid #14532d", borderRadius: 12, padding: 14 }}>
                 <div style={{ color: "#86efac", fontWeight: 900 }}>Tierras</div>
                 <div style={{ color: landsCount >= 34 && landsCount <= 38 ? "#4ade80" : "#fbbf24", fontSize: 28, fontFamily: "monospace", fontWeight: 900 }}>{landsCount}</div>
               </div>
@@ -2991,7 +3181,13 @@ export default function DeckAnalysis() {
 
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))", gap: 12 }}>
               {tokensAndExtras.tokens.map(token => (
-                <div key={token.name} style={{ background: "#071207", border: "1px solid #14532d", borderRadius: 12, padding: 14 }}>
+                <div
+                  key={token.name}
+                  onMouseEnter={(e) => { if (token.image || token.smallImage) { setPreviewCard({ name: token.name, image: token.image || token.smallImage, qty: 1, typeLine: token.typeLine || "Token" }); setPreviewPos({ x: e.clientX, y: e.clientY }); } }}
+                  onMouseMove={(e) => { if (token.image || token.smallImage) setPreviewPos({ x: e.clientX, y: e.clientY }); }}
+                  onMouseLeave={() => setPreviewCard(null)}
+                  style={{ background: "#071207", border: "1px solid #14532d", borderRadius: 12, padding: 14, cursor: token.image || token.smallImage ? "zoom-in" : "default" }}
+                >
                   <div style={{ height: 230, borderRadius: 10, background: "radial-gradient(circle at 50% 25%, #14532d 0%, #020802 70%)", display: "flex", alignItems: "center", justifyContent: "center", color: "#86efac", fontSize: 22, fontWeight: 900, textAlign: "center", padding: 8, overflow: "hidden" }}>
                     {token.image || token.smallImage ? (
                       <img src={token.image || token.smallImage} alt={token.name} style={{ width: "100%", height: "100%", objectFit: "contain", borderRadius: 8 }} />
@@ -3035,6 +3231,9 @@ export default function DeckAnalysis() {
                 <div style={{ color: "#4ade80", fontSize: 11, letterSpacing: 3, textTransform: "uppercase", fontFamily: "monospace", marginBottom: 8 }}>Commander Bracket</div>
                 <h2 style={{ margin: 0, color: "#fff", fontSize: 28 }}>{bracket.label}</h2>
                 <p style={{ color: "#94a3b8", lineHeight: 1.6, maxWidth: 720 }}>{bracket.description}</p>
+                <div style={{ color: "#fbbf24", background: "#1a1406", border: "1px solid #3a2a0a", borderRadius: 10, padding: 10, fontSize: 12, lineHeight: 1.45, maxWidth: 760 }}>
+                  Estimación automática: el bracket se basa en cartas detectadas, combos, fast mana, tutores, locks y estructura. No reemplaza la conversación previa con la mesa.
+                </div>
               </div>
               <div style={{ minWidth: 120, minHeight: 120, borderRadius: 18, border: "2px solid #22c55e66", background: "radial-gradient(circle at 50% 30%, #14532d 0%, #061106 75%)", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", boxShadow: "0 0 30px rgba(34,197,94,0.15)" }}>
                 <div style={{ fontSize: 54, lineHeight: 1, color: "#4ade80", fontWeight: 900, fontFamily: "monospace" }}>{bracket.bracket}</div>
@@ -3120,6 +3319,17 @@ export default function DeckAnalysis() {
                   Casi incluidos ({almostCombos.length})
                 </button>
               </div>
+            </div>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 14 }}>
+              <button onClick={() => setComboSizeFilter("all")} style={{ background: comboSizeFilter === "all" ? "#14532d" : "#071207", color: comboSizeFilter === "all" ? "#86efac" : "#94a3b8", border: "1px solid #14532d", borderRadius: 999, padding: "7px 12px", cursor: "pointer", fontWeight: 800 }}>
+                Todos ({comboSource.length})
+              </button>
+              <button onClick={() => setComboSizeFilter("2")} style={{ background: comboSizeFilter === "2" ? "#14532d" : "#071207", color: comboSizeFilter === "2" ? "#86efac" : "#94a3b8", border: "1px solid #14532d", borderRadius: 999, padding: "7px 12px", cursor: "pointer", fontWeight: 800 }}>
+                2 cartas ({twoCardComboCount})
+              </button>
+              <button onClick={() => setComboSizeFilter("3")} style={{ background: comboSizeFilter === "3" ? "#14532d" : "#071207", color: comboSizeFilter === "3" ? "#86efac" : "#94a3b8", border: "1px solid #14532d", borderRadius: 999, padding: "7px 12px", cursor: "pointer", fontWeight: 800 }}>
+                3 cartas ({threeCardComboCount})
+              </button>
             </div>
             {displayedCombos.length === 0 && (
               <div style={{ color: "#94a3b8", background: "#0a150a", borderRadius: 8, padding: 12 }}>
@@ -3219,6 +3429,14 @@ export default function DeckAnalysis() {
 
       {tab === "analysis" && (
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
+          <div style={{ background: bg.card, borderRadius: 12, padding: 16, border: `1px solid ${bg.cardBorder}`, gridColumn: "1 / -1", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+            <div>
+              <h3 style={{ color: "#86efac", margin: 0 }}>📄 Reporte rápido</h3>
+              <div style={{ color: "#94a3b8", fontSize: 13, marginTop: 4 }}>Copiá un resumen para compartir por WhatsApp, Discord o con tu mesa.</div>
+            </div>
+            <button onClick={copyReportToClipboard} disabled={!cards.length} style={{ background: cards.length ? "#14532d" : "#1f2937", color: "#86efac", border: "1px solid #22c55e", borderRadius: 10, padding: "10px 14px", cursor: cards.length ? "pointer" : "not-allowed", fontWeight: 900 }}>Copiar reporte</button>
+            {reportStatus && <div style={{ color: "#86efac", fontSize: 12, width: "100%" }}>{reportStatus}</div>}
+          </div>
           <div style={{ background: bg.card, borderRadius: 12, padding: 20, border: "1px solid #14532d" }}>
             <h3 style={{ color: "#4ade80", marginTop: 0 }}>✅ Fortalezas</h3>
             {strengths.map((s, i) => (
@@ -3243,15 +3461,49 @@ export default function DeckAnalysis() {
             <h3 style={{ color: "#86efac", marginTop: 0 }}>📋 Diagnóstico por rol</h3>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 10 }}>
               {scores.radar.map(r => (
-                <div key={r.subject} style={{ background: "#0a150a", borderRadius: 10, padding: 12, border: "1px solid #1a2e1a" }}>
+                <button
+                  key={r.subject}
+                  onClick={() => setSelectedDiagnostic(selectedDiagnostic === r.subject ? null : r.subject)}
+                  title={`Ver desglose de ${r.subject}`}
+                  style={{ textAlign: "left", background: selectedDiagnostic === r.subject ? "#102510" : "#0a150a", borderRadius: 10, padding: 12, border: selectedDiagnostic === r.subject ? "1px solid #22c55e" : "1px solid #1a2e1a", cursor: "pointer", fontFamily: "inherit" }}
+                >
                   <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center", marginBottom: 8 }}>
                     <span style={{ color: "#cbd5e1", fontWeight: 700 }}>{r.subject}</span>
                     <span style={{ color: r.value >= 75 ? "#4ade80" : r.value >= 55 ? "#fbbf24" : "#ef4444", fontFamily: "monospace", fontWeight: 900 }}>{r.value}</span>
                   </div>
                   <ScoreBar value={r.value} color={r.value >= 75 ? "#4ade80" : r.value >= 55 ? "#fbbf24" : "#ef4444"} />
-                </div>
+                  <div style={{ color: "#6b7280", fontSize: 10, marginTop: 7 }}>Click para desglose</div>
+                </button>
               ))}
             </div>
+            {selectedDiagnostic && (() => {
+              const detail = getDiagnosticDetail(selectedDiagnostic);
+              const radarValue = scores.radar.find(x => x.subject === selectedDiagnostic)?.value;
+              return (
+                <div style={{ marginTop: 14, background: "#071207", border: "1px solid #22c55e55", borderRadius: 12, padding: 15 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start", flexWrap: "wrap" }}>
+                    <div>
+                      <h4 style={{ color: "#86efac", margin: "0 0 6px", fontSize: 18 }}>{detail.title}</h4>
+                      <div style={{ color: "#fbbf24", fontFamily: "monospace", fontWeight: 900 }}>Score: {radarValue}/100</div>
+                    </div>
+                    <button onClick={() => setSelectedDiagnostic(null)} style={{ background: "#0d2b14", color: "#d1fae5", border: "1px solid #14532d", borderRadius: 8, padding: "6px 10px", cursor: "pointer" }}>Cerrar</button>
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: 12, marginTop: 12 }}>
+                    <div style={{ color: "#cbd5e1", lineHeight: 1.6 }}><b style={{ color: "#fff" }}>Objetivo:</b><br />{detail.goal}</div>
+                    <div style={{ color: "#cbd5e1", lineHeight: 1.6 }}><b style={{ color: "#fff" }}>Por qué da ese puntaje:</b><br />{detail.why}</div>
+                    <div style={{ color: "#cbd5e1", lineHeight: 1.6 }}><b style={{ color: "#fff" }}>Cómo lo calcula:</b><br />{detail.formula}</div>
+                  </div>
+                  {detail.cards?.length > 0 && (
+                    <div style={{ marginTop: 12 }}>
+                      <div style={{ color: "#86efac", fontWeight: 900, marginBottom: 8 }}>Cartas/piezas que influyen:</div>
+                      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                        {detail.cards.map(x => <span key={x} style={{ background: "#0a150a", border: "1px solid #14532d", color: "#cbd5e1", borderRadius: 999, padding: "5px 9px", fontSize: 12 }}>{x}</span>)}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
           </div>
 
           <div style={{ background: bg.card, borderRadius: 12, padding: 20, border: `1px solid ${bg.cardBorder}`, gridColumn: "1 / -1" }}>
@@ -3324,18 +3576,30 @@ export default function DeckAnalysis() {
                     <div style={{ color: "#94a3b8", fontSize: 12, marginTop: 2 }}>Cartas que no tenés y que la app detecta como posibles inclusiones por roles faltantes, arquetipo o combos casi completos.</div>
                   </div>
                 </div>
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: 8 }}>
-                  {autoAddRecommendations.slice(0, 12).map(suggestion => (
-                    <button
-                      key={`${suggestion.area}-${suggestion.name}`}
-                      onClick={() => addWantedCard(suggestion.name)}
-                      title={suggestion.reason}
-                      style={{ textAlign: "left", background: "#0a150a", color: "#d1fae5", border: "1px solid #14532d", borderRadius: 10, padding: 10, cursor: "pointer" }}
-                    >
-                      <div style={{ color: "#fff", fontWeight: 900, fontSize: 13 }}>+ {suggestion.name}</div>
-                      <div style={{ color: "#86efac", fontSize: 11, marginTop: 3 }}>{suggestion.area}</div>
-                    </button>
-                  ))}
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))", gap: 10 }}>
+                  {autoAddRecommendations.slice(0, 12).map(suggestion => {
+                    const data = suggestionCardData[normalizeName(suggestion.name)];
+                    return (
+                      <button
+                        key={`${suggestion.area}-${suggestion.name}`}
+                        onClick={() => addWantedCard(suggestion.name)}
+                        onMouseEnter={(e) => { if (data?.image) { setPreviewCard({ ...data, qty: 1 }); setPreviewPos({ x: e.clientX, y: e.clientY }); } }}
+                        onMouseMove={(e) => { if (data?.image) setPreviewPos({ x: e.clientX, y: e.clientY }); }}
+                        onMouseLeave={() => setPreviewCard(null)}
+                        title={suggestion.reason}
+                        style={{ textAlign: "left", background: "#0a150a", color: "#d1fae5", border: "1px solid #14532d", borderRadius: 10, padding: 8, cursor: "pointer", display: "flex", gap: 9, alignItems: "center", minHeight: 84, fontFamily: "inherit" }}
+                      >
+                        <div style={{ width: 48, height: 67, borderRadius: 6, overflow: "hidden", background: "#020802", border: "1px solid #14532d", flex: "0 0 auto", display: "flex", alignItems: "center", justifyContent: "center", color: "#6b7280", fontSize: 9 }}>
+                          {data?.smallImage || data?.image ? <img src={data.smallImage || data.image} alt={suggestion.name} style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : "Img"}
+                        </div>
+                        <div style={{ minWidth: 0 }}>
+                          <div style={{ color: "#fff", fontWeight: 900, fontSize: 13, lineHeight: 1.25 }}>+ {suggestion.name}</div>
+                          <div style={{ color: "#86efac", fontSize: 11, marginTop: 3 }}>{suggestion.area}</div>
+                          <div style={{ color: "#6b7280", fontSize: 10, marginTop: 3, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{data?.manaCost || data?.typeLine || "Scryfall"}</div>
+                        </div>
+                      </button>
+                    );
+                  })}
                 </div>
               </div>
             )}
@@ -3375,12 +3639,29 @@ export default function DeckAnalysis() {
               {selectedWantedCards.length > 0 && (
                 <div style={{ marginTop: 12 }}>
                   <div style={{ color: "#86efac", fontSize: 12, marginBottom: 6 }}>Seleccionadas:</div>
-                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                    {selectedWantedCards.map(card => (
-                      <button key={card} onClick={() => removeWantedCard(card)} title="Quitar" style={{ background: "#1a3a1a", color: "#d1fae5", border: "1px solid #14532d", borderRadius: 999, padding: "5px 9px", cursor: "pointer", fontSize: 12 }}>
-                        {card} ✕
-                      </button>
-                    ))}
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(150px, 1fr))", gap: 8 }}>
+                    {selectedWantedCards.map(card => {
+                      const data = suggestionCardData[normalizeName(card)];
+                      return (
+                        <button
+                          key={card}
+                          onClick={() => removeWantedCard(card)}
+                          onMouseEnter={(e) => { if (data?.image) { setPreviewCard({ ...data, qty: 1 }); setPreviewPos({ x: e.clientX, y: e.clientY }); } }}
+                          onMouseMove={(e) => { if (data?.image) setPreviewPos({ x: e.clientX, y: e.clientY }); }}
+                          onMouseLeave={() => setPreviewCard(null)}
+                          title="Click para quitar"
+                          style={{ background: "#1a3a1a", color: "#d1fae5", border: "1px solid #14532d", borderRadius: 10, padding: 7, cursor: "pointer", fontSize: 12, display: "flex", gap: 8, alignItems: "center", textAlign: "left", fontFamily: "inherit" }}
+                        >
+                          <div style={{ width: 38, height: 53, borderRadius: 5, overflow: "hidden", background: "#020802", border: "1px solid #14532d", flex: "0 0 auto" }}>
+                            {data?.smallImage || data?.image ? <img src={data.smallImage || data.image} alt={card} style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : null}
+                          </div>
+                          <div style={{ minWidth: 0 }}>
+                            <div style={{ color: "#fff", fontWeight: 800, lineHeight: 1.2 }}>{card}</div>
+                            <div style={{ color: "#fca5a5", fontSize: 10, marginTop: 2 }}>Quitar ✕</div>
+                          </div>
+                        </button>
+                      );
+                    })}
                   </div>
                 </div>
               )}
@@ -3498,8 +3779,9 @@ Mycoloth`}
         </div>
       )}
 
-      <div style={{ textAlign: "center", color: "#1f2937", fontSize: 11, marginTop: 20, fontFamily: "monospace" }}>
-        COMMANDER DECK ANALYZER · UNIVERSAL · DYNAMIC · v1.2
+      <div style={{ textAlign: "center", color: "#31503a", fontSize: 11, marginTop: 20, fontFamily: "monospace", lineHeight: 1.6 }}>
+        COMMANDER DECK ANALYZER · UNIVERSAL · DYNAMIC · v1.4<br />
+        Unofficial fan project. Not affiliated with Wizards of the Coast, Scryfall, EDHREC, Archidekt or Commander Spellbook.
       </div>
     </div>
   );

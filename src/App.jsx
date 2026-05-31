@@ -1950,6 +1950,8 @@ export default function DeckAnalysis() {
   const [spellbookStatus, setSpellbookStatus] = useState("Sin consultar Commander Spellbook");
   const [spellbookLoading, setSpellbookLoading] = useState(false);
   const [spellbookHasFetched, setSpellbookHasFetched] = useState(false);
+  const [previewCard, setPreviewCard] = useState(null);
+  const [previewPos, setPreviewPos] = useState({ x: 0, y: 0 });
 
   const commander = useMemo(() => getCommander(cards), [cards]);
   const totalCards = useMemo(() => cards.reduce((a, c) => a + c.qty, 0), [cards]);
@@ -1982,6 +1984,31 @@ export default function DeckAnalysis() {
       .sort((a, b) => a.missing.length - b.missing.length || b.present.length - a.present.length || a.name.localeCompare(b.name));
   }, [combos, spellbookAlmostCombos, spellbookHasFetched]);
   const displayedCombos = comboView === "included" ? includedCombos : almostCombos;
+  const autoAddRecommendations = useMemo(() => {
+    const owned = new Set(cards.map(c => normalizeName(c.name)));
+    const out = [];
+    const push = (name, area, reason) => {
+      const clean = String(name || "").trim();
+      if (!clean || owned.has(normalizeName(clean))) return;
+      if (out.some(x => normalizeName(x.name) === normalizeName(clean))) return;
+      out.push({ name: clean, area, reason });
+    };
+
+    for (const rec of recommendations) {
+      for (const option of rec.options || []) {
+        if (String(option).toLowerCase().includes("cycle")) continue;
+        push(option, rec.area, rec.reason);
+      }
+    }
+
+    for (const combo of almostCombos.slice(0, 30)) {
+      for (const missing of combo.missing || []) {
+        push(missing, "Completar combo", `Completa la línea: ${combo.name}`);
+      }
+    }
+
+    return out.slice(0, 18);
+  }, [cards, recommendations, almostCombos]);
   const synergyLines = useMemo(() => detectSynergyLines(cards), [cards]);
   const strengths = useMemo(() => generateStrengths(cards), [cards]);
   const weaknesses = useMemo(() => generateWeaknesses(cards), [cards]);
@@ -2300,9 +2327,22 @@ export default function DeckAnalysis() {
       .map(x => x.charAt(0).toUpperCase() + x.slice(1).toLowerCase())
       .join(" ");
 
+    const badTokenNames = new Set(["of", "s", "number", "number of", "number of treasure", "s treasure", "token", "tokens", "a", "an", "the", "x"]);
+
+    const cleanTokenDisplayName = (rawName, typeLine = "") => {
+      let name = normalizeTokenName(rawName, typeLine);
+      name = String(name || "").replace(/\s+/g, " ").trim();
+      const low = normalizeName(name);
+      if (!name || name.length < 2 || name.length > 60) return "";
+      if (badTokenNames.has(low)) return "";
+      if (/^[a-z]$/i.test(name)) return "";
+      if (low.startsWith("number of ")) return "Treasure";
+      return titleCase(name);
+    };
+
     const addToken = (rawName, sourceCard, tokenData = {}) => {
-      const name = titleCase(normalizeTokenName(rawName, tokenData.typeLine || ""));
-      if (!name || name.length > 60) return;
+      const name = cleanTokenDisplayName(rawName, tokenData.typeLine || "");
+      if (!name) return;
       if (!found.has(name)) {
         found.set(name, {
           name,
@@ -2323,56 +2363,39 @@ export default function DeckAnalysis() {
       entry.sourceDetails.push({ name: sourceCard.name, image: sourceCard.smallImage || sourceCard.image || "" });
     };
 
-    const cleanGenericTokenLabel = fragment => {
-      let x = String(fragment || "").toLowerCase();
-      if (!x || x.includes("copy of")) return "";
-      x = x.replaceAll("—", " ").replaceAll(",", " ").replaceAll(".", " ");
-      x = x.replaceAll("tapped and attacking", " ").replaceAll("tapped", " ").replaceAll("attacking", " ");
-      x = x.replaceAll("with ", " with ");
-      if (x.includes(" with ")) x = x.split(" with ")[0];
-      if (x.includes(" named ")) x = x.split(" named ")[0];
-      const drop = new Set(["a", "an", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "x", "twice", "that", "many", "those", "these", "the", "and", "or", "more", "additional", "white", "blue", "black", "red", "green", "colorless", "multicolored", "artifact", "creature", "enchantment", "legendary", "nonlegendary", "token", "tokens", "create", "creates", "copy"]);
-      const parts = x.split(" ").map(p => p.trim()).filter(Boolean).filter(p => {
-        if (drop.has(p)) return false;
-        if (p.includes("/")) return false;
-        if (isDigits(p)) return false;
-        return true;
-      });
-      const label = parts.slice(-3).join(" ").trim();
-      return label ? titleCase(label) : "";
-    };
-
     const knownTokens = [
-      "Treasure", "Food", "Clue", "Blood", "Powerstone", "Map", "Junk", "Gold", "Shard", "Pest", "Snake", "Zombie", "Saproling", "Soldier", "Human Soldier", "Beast", "Spirit", "Elf", "Goblin", "Insect", "Servo", "Thopter", "Myr", "Eldrazi Spawn", "Eldrazi Scion", "Plant", "Wolf", "Cat", "Dog", "Rat", "Vampire", "Skeleton", "Phyrexian Germ", "Incubator", "Role", "Cursed Role", "Monster Role", "Royal Role", "Sorcerer Role", "Wicked Role", "Young Hero Role"
+      "Treasure", "Food", "Clue", "Blood", "Powerstone", "Map", "Junk", "Gold", "Shard",
+      "Pest", "Snake", "Zombie", "Saproling", "Soldier", "Human Soldier", "Beast", "Spirit",
+      "Elf", "Goblin", "Insect", "Servo", "Thopter", "Myr", "Eldrazi Spawn", "Eldrazi Scion",
+      "Plant", "Wolf", "Cat", "Dog", "Rat", "Vampire", "Skeleton", "Phyrexian Germ",
+      "Incubator", "Role", "Cursed Role", "Monster Role", "Royal Role", "Sorcerer Role", "Wicked Role", "Young Hero Role",
+      "Dragon Illusion", "Phyrexian Goblin"
     ];
 
+    const oracleMentionsKnownToken = (oracle, label) => {
+      const low = normalizeName(label);
+      const variants = [
+        `${low} token`, `${low} tokens`,
+        `${low} artifact token`, `${low} artifact tokens`,
+        `${low} creature token`, `${low} creature tokens`,
+        `${low} enchantment token`, `${low} enchantment tokens`,
+      ];
+      return variants.some(v => oracle.includes(v));
+    };
+
     for (const card of cards) {
+      // Fuente principal: Scryfall all_parts / related token. Esto evita inventar tokens raros.
       for (const token of card.relatedTokens || []) {
         addToken(token.name, card, token);
       }
 
       const oracle = normalizeName(card.oracle || "");
-      const oracleRaw = String(card.oracle || "");
       if (oracle.includes("token")) {
         for (const label of knownTokens) {
-          const low = normalizeName(label);
-          if (oracle.includes(low + " token") || oracle.includes(low + " artifact token") || oracle.includes(low + " creature token") || oracle.includes(low + " enchantment token")) {
-            addToken(label, card);
-          }
+          if (oracleMentionsKnownToken(oracle, label)) addToken(label, card);
         }
         if (oracle.includes("token that's a copy") || oracle.includes("token thats a copy") || oracle.includes("token copy") || oracle.includes("copy token") || oracle.includes("copy of target")) {
           addToken("Copy", card);
-        }
-
-        const sentences = oracleRaw.replaceAll(String.fromCharCode(10), ". ").split(".");
-        for (const sentence of sentences) {
-          const s = normalizeName(sentence);
-          if (!s.includes("create") || !s.includes("token")) continue;
-          const beforeToken = s.split("token")[0] || "";
-          const afterCreateParts = beforeToken.split("create");
-          const fragment = afterCreateParts[afterCreateParts.length - 1] || "";
-          const label = cleanGenericTokenLabel(fragment);
-          if (label && !["A", "An", "One", "Two", "Three", "X"].includes(label)) addToken(label, card);
         }
       }
 
@@ -2527,6 +2550,8 @@ export default function DeckAnalysis() {
         .stat-card-clickable:hover { transform: translateY(-2px); border-color: rgba(34,197,94,.85) !important; box-shadow: 0 0 30px rgba(34,197,94,.16) !important; background: #0f1f0f !important; }
         .deck-stack-card { transition: transform .18s ease, filter .18s ease; }
         .deck-stack-card:hover { transform: translateY(-12px) scale(1.035); z-index: 999 !important; filter: drop-shadow(0 0 18px rgba(34,197,94,.34)); }
+        .card-preview-flyout { animation: previewIn .12s ease-out; }
+        @keyframes previewIn { from { opacity: 0; transform: scale(.96); } to { opacity: 1; transform: scale(1); } }
         .deck-column-scroll::-webkit-scrollbar { height: 10px; width: 10px; }
         .deck-column-scroll::-webkit-scrollbar-thumb { background: #14532d; border-radius: 999px; }
         .deck-column-scroll::-webkit-scrollbar-track { background: #020802; border-radius: 999px; }
@@ -2836,7 +2861,16 @@ export default function DeckAnalysis() {
 
                 <div style={{ position: "relative", minHeight: group.cards.length ? 232 + Math.max(0, group.cards.length - 1) * 42 : 40, paddingBottom: 10 }}>
                   {group.cards.map((card, idx) => (
-                    <div className="deck-stack-card" key={card.key} title={`${card.qty}x ${card.name} · ${card.manaCost || (card.type === "Tierras" ? "Land" : `MV ${card.cmc ?? "?"}`)}`} style={{ position: "relative", marginTop: idx === 0 ? 0 : -188, zIndex: idx + 1, width: 158, marginLeft: "auto", marginRight: "auto", cursor: "zoom-in" }}>
+                    <div
+                      className="deck-stack-card"
+                      key={card.key}
+                      title={`${card.qty}x ${card.name} · ${card.manaCost || (card.type === "Tierras" ? "Land" : `MV ${card.cmc ?? "?"}`)}`}
+                      onMouseEnter={(e) => { setPreviewCard(card); setPreviewPos({ x: e.clientX, y: e.clientY }); }}
+                      onMouseMove={(e) => setPreviewPos({ x: e.clientX, y: e.clientY })}
+                      onMouseLeave={() => setPreviewCard(null)}
+                      onClick={() => { setCardSearch(card.name); setTab("cards"); }}
+                      style={{ position: "relative", marginTop: idx === 0 ? 0 : -188, zIndex: idx + 1, width: 158, marginLeft: "auto", marginRight: "auto", cursor: "zoom-in" }}
+                    >
                       <div style={{ width: 158, height: 220, borderRadius: 10, overflow: "hidden", background: "#020802", border: "1px solid #14532d", boxShadow: "0 8px 20px rgba(0,0,0,0.45)", position: "relative" }}>
                         {card.smallImage || card.image ? (
                           <img src={card.image || card.smallImage} alt={card.name} style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
@@ -3282,6 +3316,30 @@ export default function DeckAnalysis() {
           <div style={{ background: bg.card, borderRadius: 12, padding: 20, border: `1px solid ${bg.cardBorder}` }}>
             <h3 style={{ color: "#86efac", marginTop: 0 }}>Cartas que querés meter</h3>
 
+            {autoAddRecommendations.length > 0 && (
+              <div style={{ background: "#071207", border: "1px solid #14532d", borderRadius: 12, padding: 12, marginBottom: 12 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center", marginBottom: 10 }}>
+                  <div>
+                    <div style={{ color: "#86efac", fontWeight: 900 }}>Sugerencias automáticas para este mazo</div>
+                    <div style={{ color: "#94a3b8", fontSize: 12, marginTop: 2 }}>Cartas que no tenés y que la app detecta como posibles inclusiones por roles faltantes, arquetipo o combos casi completos.</div>
+                  </div>
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: 8 }}>
+                  {autoAddRecommendations.slice(0, 12).map(suggestion => (
+                    <button
+                      key={`${suggestion.area}-${suggestion.name}`}
+                      onClick={() => addWantedCard(suggestion.name)}
+                      title={suggestion.reason}
+                      style={{ textAlign: "left", background: "#0a150a", color: "#d1fae5", border: "1px solid #14532d", borderRadius: 10, padding: 10, cursor: "pointer" }}
+                    >
+                      <div style={{ color: "#fff", fontWeight: 900, fontSize: 13 }}>+ {suggestion.name}</div>
+                      <div style={{ color: "#86efac", fontSize: 11, marginTop: 3 }}>{suggestion.area}</div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
             <div style={{ background: "#0a150a", border: "1px solid #14532d", borderRadius: 10, padding: 12, marginBottom: 12 }}>
               <div style={{ color: "#cbd5e1", fontSize: 13, marginBottom: 8 }}>Buscar y seleccionar carta</div>
               <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
@@ -3416,8 +3474,32 @@ Mycoloth`}
         </div>
       )}
 
+      {previewCard?.image && (
+        <div
+          className="card-preview-flyout"
+          style={{
+            position: "fixed",
+            left: Math.min((typeof window !== "undefined" ? window.innerWidth : 1400) - 340, previewPos.x + 22),
+            top: Math.min((typeof window !== "undefined" ? window.innerHeight : 900) - 470, previewPos.y + 18),
+            zIndex: 99999,
+            pointerEvents: "none",
+            width: 318,
+            borderRadius: 18,
+            padding: 10,
+            background: "rgba(2,8,2,0.94)",
+            border: "1px solid #22c55e88",
+            boxShadow: "0 0 45px rgba(34,197,94,0.32), 0 16px 60px rgba(0,0,0,0.7)",
+            backdropFilter: "blur(8px)",
+          }}
+        >
+          <img src={previewCard.image} alt={previewCard.name} style={{ width: "100%", borderRadius: 14, display: "block" }} />
+          <div style={{ color: "#fff", fontWeight: 900, fontSize: 14, marginTop: 8 }}>{previewCard.qty}x {previewCard.name}</div>
+          <div style={{ color: "#94a3b8", fontSize: 12, marginTop: 3 }}>{previewCard.typeLine || previewCard.type}</div>
+        </div>
+      )}
+
       <div style={{ textAlign: "center", color: "#1f2937", fontSize: 11, marginTop: 20, fontFamily: "monospace" }}>
-        COMMANDER DECK ANALYZER · UNIVERSAL · DYNAMIC · v1.1
+        COMMANDER DECK ANALYZER · UNIVERSAL · DYNAMIC · v1.2
       </div>
     </div>
   );

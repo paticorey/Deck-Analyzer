@@ -5,7 +5,7 @@ import {
 } from "recharts";
 
 /*
-  Commander Deck Analyzer v1.1
+  Commander Deck Analyzer v1.5
   - Mantiene la UI visual del prototipo original.
   - Arranca vacío.
   - Permite pegar decklist.
@@ -659,6 +659,7 @@ function detectRoles(card) {
   const key = normalizeName(name);
   const oracle = (card.oracle || "").toLowerCase();
   const type = (card.typeLine || "").toLowerCase();
+  const isLandCard = card.type === "Tierras" || type.includes("land");
   const text = `${key} ${oracle} ${type}`;
 
   const includesAny = (haystack, needles) => needles.some(n => haystack.includes(n));
@@ -674,7 +675,7 @@ function detectRoles(card) {
   const manaText = hasOracle("add {", "add one mana", "add two mana", "add three mana", "add x mana", "add an amount of", "treasure token", "create a treasure") ||
     (hasOracle("search your library") && hasOracle("land card")) ||
     hasOracle("put a land card", "put up to one land", "additional land", "play an additional land");
-  if (rampByName || manaText) roles.add("Ramp");
+  if (!isLandCard && (rampByName || manaText)) roles.add("Ramp");
 
   // 2) Draw / card advantage. No cuenta loot puro como draw si solo descarta sin ventaja, pero sí lo etiqueta como Draw si roba.
   if (hasOracle("draw a card", "draw two cards", "draw three cards", "draw x cards", "draw cards", "draw that many cards", "investigate", "clue token")) roles.add("Draw");
@@ -770,6 +771,12 @@ function detectRoles(card) {
 
   // 20) Finisher: amenazas/cierres evidentes, sin inflar criaturas normales.
   if (hasOracle("you win the game", "each opponent loses", "double", "extra combat") || hasName("exsanguinate", "torment of hailfire", "craterhoof behemoth", "finale of devastation", "aetherflux reservoir")) roles.add("Finisher");
+
+  // Las tierras no deben inflar Ramp aunque su texto produzca maná.
+  if (isLandCard) {
+    roles.delete("Ramp");
+    roles.add("Land");
+  }
 
   return [...roles].filter(Boolean);
 }
@@ -918,10 +925,73 @@ function getCommander(cards) {
   return cards.find(c => c.type === "Commander" || c.tags.some(t => t.toLowerCase().includes("commander"))) || null;
 }
 
+function getCommanderColorIdentity(cards) {
+  const commander = getCommander(cards);
+  if (commander && Array.isArray(commander.colorIdentity)) return commander.colorIdentity;
+  return null;
+}
+
+function colorIdentityFitsCommander(cardColorIdentity, commanderColorIdentity) {
+  // null = todavía no sabemos los colores del comandante; no bloqueamos.
+  if (commanderColorIdentity === null) return true;
+  const ci = Array.isArray(cardColorIdentity) ? cardColorIdentity : [];
+  return ci.every(color => commanderColorIdentity.includes(color));
+}
+
+function suggestionNameFitsCommander(name, commanderColorIdentity, suggestionCardData = {}) {
+  const data = suggestionCardData[normalizeName(name)];
+  if (!data || !Array.isArray(data.colorIdentity)) return true;
+  return colorIdentityFitsCommander(data.colorIdentity, commanderColorIdentity);
+}
+
+
+function getEffectiveRoles(card) {
+  const roles = detectRoles(card);
+  // Las tierras pueden producir maná, pero no queremos que inflen el conteo de Ramp.
+  // Ramp cuenta spells/artefactos/criaturas que aceleran, no la manabase normal.
+  if (card?.type === "Tierras") return roles.filter(role => role !== "Ramp");
+  return roles;
+}
+
+function getDeckAllowedColors(cards) {
+  const commander = getCommander(cards);
+  if (commander) return commander.colorIdentity || [];
+  const colors = new Set();
+  for (const card of cards) {
+    if (card.type === "Tierras") continue;
+    for (const color of card.colorIdentity || []) colors.add(color);
+  }
+  return [...colors];
+}
+
+function isColorIdentityAllowed(colorIdentity, allowedColors) {
+  const ci = Array.isArray(colorIdentity) ? colorIdentity : [];
+  const allowed = new Set(Array.isArray(allowedColors) ? allowedColors : []);
+  return ci.every(color => allowed.has(color));
+}
+
+function isSuggestionAllowedForCommander(name, suggestionCardData, allowedColors, hasCommander = true) {
+  if (!hasCommander) return true;
+  const data = suggestionCardData?.[normalizeName(name)];
+  // Mientras Scryfall todavía no cargó esa sugerencia, la dejamos visible de forma provisional.
+  // Cuando llega colorIdentity, se filtra automáticamente si es off-color.
+  if (!data || !Array.isArray(data.colorIdentity)) return true;
+  return isColorIdentityAllowed(data.colorIdentity, allowedColors);
+}
+
+function getDeckTotalPrice(cards) {
+  return cards.reduce((total, card) => total + (Number(card.price) || 0) * (card.qty || 1), 0);
+}
+
+function formatMoney(value) {
+  if (!value || Number.isNaN(value)) return "-";
+  return `${value.toFixed(2)}€`;
+}
+
 function aggregateRoles(cards) {
   const roleMap = new Map();
   for (const c of cards) {
-    const roles = detectRoles(c);
+    const roles = getEffectiveRoles(c);
     for (const r of roles) {
       roleMap.set(r, (roleMap.get(r) || 0) + c.qty);
     }
@@ -1639,7 +1709,7 @@ function filterCards(cards, filter) {
   if (!filter) return cards;
   if (filter.kind === "cmc") return cards.filter(c => getCmcBucket(c) === filter.value);
   if (filter.kind === "type") return cards.filter(c => c.type === filter.value);
-  if (filter.kind === "role") return cards.filter(c => detectRoles(c).includes(filter.value));
+  if (filter.kind === "role") return cards.filter(c => getEffectiveRoles(c).includes(filter.value));
   return cards;
 }
 
@@ -1656,7 +1726,7 @@ function getRoleCount(cards, role) {
 }
 
 function getRoleCards(cards, role, limit = 6) {
-  return cards.filter(c => detectRoles(c).includes(role)).slice(0, limit).map(c => c.name);
+  return cards.filter(c => getEffectiveRoles(c).includes(role)).slice(0, limit).map(c => c.name);
 }
 
 function generateStrengths(cards) {
@@ -1772,7 +1842,7 @@ function getCutCandidates(cards, limit = 8) {
   return cards
     .filter(c => c.type !== "Commander" && c.type !== "Tierras" && !protectedKeys.has(c.key))
     .map(c => {
-      const roles = detectRoles(c);
+      const roles = getEffectiveRoles(c);
       const isCore = roles.some(r => coreRoles.has(r));
       let score = 10;
       const reasons = [];
@@ -1958,7 +2028,10 @@ export default function DeckAnalysis() {
   const [suggestionCardData, setSuggestionCardData] = useState({});
 
   const commander = useMemo(() => getCommander(cards), [cards]);
+  const deckAllowedColors = useMemo(() => getDeckAllowedColors(cards), [cards]);
+  const totalDeckPrice = useMemo(() => getDeckTotalPrice(cards), [cards]);
   const totalCards = useMemo(() => cards.reduce((a, c) => a + c.qty, 0), [cards]);
+  const pricedCardsCount = useMemo(() => cards.filter(c => Number(c.price) > 0).reduce((a, c) => a + c.qty, 0), [cards]);
   const landsCount = useMemo(() => cards.filter(c => c.type === "Tierras").reduce((a, c) => a + c.qty, 0), [cards]);
   const manaCurve = useMemo(() => calculateManaCurve(cards), [cards]);
   const cardTypes = useMemo(() => countBy(cards, c => c.type).map(d => ({ ...d, color: CARD_TYPE_COLORS[d.name] || CARD_TYPE_COLORS.Otros })), [cards]);
@@ -1983,10 +2056,12 @@ export default function DeckAnalysis() {
   }, [combos, spellbookIncludedCombos, spellbookHasFetched]);
   const almostCombos = useMemo(() => {
     const source = spellbookHasFetched ? spellbookAlmostCombos : combos;
+    const hasCommander = !!commander;
     return source
       .filter(c => !c.complete && c.pieces.length >= 2 && c.pieces.length <= 3 && c.missing.length === 1 && c.present.length >= c.pieces.length - 1)
+      .filter(c => (c.missing || []).every(name => isSuggestionAllowedForCommander(name, suggestionCardData, deckAllowedColors, hasCommander)))
       .sort((a, b) => a.missing.length - b.missing.length || b.present.length - a.present.length || a.name.localeCompare(b.name));
-  }, [combos, spellbookAlmostCombos, spellbookHasFetched]);
+  }, [combos, spellbookAlmostCombos, spellbookHasFetched, suggestionCardData, deckAllowedColors, commander]);
   const comboSource = comboView === "included" ? includedCombos : almostCombos;
   const twoCardComboCount = comboSource.filter(c => c.pieces.length === 2).length;
   const threeCardComboCount = comboSource.filter(c => c.pieces.length === 3).length;
@@ -2016,6 +2091,10 @@ export default function DeckAnalysis() {
 
     return out.slice(0, 18);
   }, [cards, recommendations, almostCombos]);
+  const visibleAutoAddRecommendations = useMemo(() => {
+    const hasCommander = !!commander;
+    return autoAddRecommendations.filter(suggestion => isSuggestionAllowedForCommander(suggestion.name, suggestionCardData, deckAllowedColors, hasCommander));
+  }, [autoAddRecommendations, suggestionCardData, deckAllowedColors, commander]);
   const synergyLines = useMemo(() => detectSynergyLines(cards), [cards]);
   const strengths = useMemo(() => generateStrengths(cards), [cards]);
   const weaknesses = useMemo(() => generateWeaknesses(cards), [cards]);
@@ -2024,11 +2103,11 @@ export default function DeckAnalysis() {
   const colorCurveGroups = useMemo(() => getColorCurveGroups(), [cards]);
   const tokensAndExtras = useMemo(() => detectTokensAndExtras(), [cards]);
   const allTypes = useMemo(() => ["Todos", ...new Set(cards.map(c => c.type).filter(Boolean))], [cards]);
-  const allRoles = useMemo(() => ["Todos", ...new Set(cards.flatMap(c => detectRoles(c)).filter(Boolean))].sort((a, b) => a === "Todos" ? -1 : b === "Todos" ? 1 : a.localeCompare(b)), [cards]);
+  const allRoles = useMemo(() => ["Todos", ...new Set(cards.flatMap(c => getEffectiveRoles(c)).filter(Boolean))].sort((a, b) => a === "Todos" ? -1 : b === "Todos" ? 1 : a.localeCompare(b)), [cards]);
   const filteredCards = useMemo(() => {
     let base = filterCards(cards, activeFilter);
     if (typeFilter !== "Todos") base = base.filter(c => c.type === typeFilter);
-    if (roleFilter !== "Todos") base = base.filter(c => detectRoles(c).includes(roleFilter));
+    if (roleFilter !== "Todos") base = base.filter(c => getEffectiveRoles(c).includes(roleFilter));
     if (cardSearch.trim()) {
       const q = normalizeName(cardSearch);
       base = base.filter(c => normalizeName(c.name).includes(q));
@@ -2079,11 +2158,11 @@ export default function DeckAnalysis() {
           const data = await fetchScryfallCard(name);
           const scry = scryToCardData(data);
           if (!cancelled) {
-            setSuggestionCardData(prev => ({ ...prev, [key]: { name: scry.name || name, image: scry.image, smallImage: scry.smallImage, typeLine: scry.typeLine, manaCost: scry.manaCost, price: scry.price } }));
+            setSuggestionCardData(prev => ({ ...prev, [key]: { name: scry.name || name, image: scry.image, smallImage: scry.smallImage, typeLine: scry.typeLine, manaCost: scry.manaCost, colorIdentity: scry.colorIdentity || [], price: scry.price } }));
           }
           await sleep(35);
         } catch {
-          if (!cancelled) setSuggestionCardData(prev => ({ ...prev, [key]: { name, image: "", smallImage: "", typeLine: "" } }));
+          if (!cancelled) setSuggestionCardData(prev => ({ ...prev, [key]: { name, image: "", smallImage: "", typeLine: "", colorIdentity: null, notFound: true } }));
         }
       }
     }
@@ -2157,11 +2236,14 @@ export default function DeckAnalysis() {
         landsCount,
         avgCMC,
         overall: scores.overall,
+        price: totalDeckPrice,
         bracket: bracket.bracket,
         bracketLabel: bracket.shortLabel,
         archetypes: archetypes.map(a => a.name),
         commanderImage: commander?.image || commander?.smallImage || "",
         combos: relevantCombos.filter(c => c.complete).length,
+        totalPrice: totalDeckPrice,
+        pricedCardsCount,
       },
     };
 
@@ -2287,7 +2369,7 @@ export default function DeckAnalysis() {
   function getDeckViewPrimaryRole(card) {
     if (card.type === "Commander") return "Commander";
     if (card.type === "Tierras") return "Land";
-    const roles = detectRoles(card);
+    const roles = getEffectiveRoles(card);
     const priority = ["Ramp", "Draw", "Removal", "Board Wipe", "Counterspell", "Protection", "Tutor", "Combo", "Finisher", "Tokens", "Sac Outlet", "Drain", "Lifegain", "Recursion", "Reanimator", "Untap", "Evasion", "Counters", "Blink", "ETB", "Artifacts", "Enchantress", "Voltron", "Equipment", "Tribal", "Stax", "Goad"];
     return priority.find(r => roles.includes(r)) || roles[0] || card.type || "Other";
   }
@@ -2587,7 +2669,7 @@ export default function DeckAnalysis() {
     const cardNamesForRoles = (roleList, limit = 10) => {
       const found = [];
       for (const card of cards) {
-        const cardRoles = detectRoles(card);
+        const cardRoles = getEffectiveRoles(card);
         if (roleList.some(role => cardRoles.includes(role))) found.push(`${card.qty}x ${card.name}`);
       }
       return found.slice(0, limit);
@@ -2671,6 +2753,7 @@ export default function DeckAnalysis() {
     { label: "Cartas", value: cards.length ? String(totalCards) : "-", icon: "🃏", color: "#4ade80", sub: totalCards === 100 ? "Commander legal" : totalCards ? `${totalCards > 100 ? "Sobran" : "Faltan"} ${Math.abs(totalCards - 100)}` : "Sin mazo" },
     { label: "CMC Prom.", value: avgCMC, icon: "⚡", color: "#fbbf24", sub: "calculado del mazo" },
     { label: "Tierras", value: cards.length ? String(landsCount) : "-", icon: "🌍", color: "#94a3b8", sub: landsCount < 34 ? "bajo" : landsCount <= 38 ? "correcto" : "alto" },
+    { label: "Precio", value: cards.length ? formatMoney(totalDeckPrice) : "-", icon: "💶", color: "#facc15", sub: pricedCardsCount ? `${pricedCardsCount} cartas con precio` : "cargar Scryfall" },
     { label: "Arquetipo", value: archetypes[0]?.name?.split(" ")[0] || "-", icon: "🎭", color: "#a855f7", sub: archetypes[0]?.name || "no detectado" },
     { label: "Bracket", value: cards.length ? String(bracket.bracket) : "-", icon: "🏷️", color: "#ef4444", sub: bracket.label?.replace(/Bracket \d — /, "") || "-" },
     { label: "Overall", value: cards.length ? scores.overall : "-", icon: "⭐", color: "#f59e0b", sub: "/ 10 salud del mazo" },
@@ -2694,6 +2777,14 @@ export default function DeckAnalysis() {
       openCardFilter({ kind: "type", value: "Tierras" });
       return;
     }
+    if (label === "Precio") {
+      setTab("stats");
+      return;
+    }
+    if (label === "Precio") {
+      setTab("stats");
+      return;
+    }
     if (label === "Arquetipo") {
       setTab("analysis");
       return;
@@ -2713,6 +2804,7 @@ export default function DeckAnalysis() {
       Cartas: "Ver galería completa de cartas",
       "CMC Prom.": "Ver estadísticas detalladas de curva y colores",
       Tierras: "Ver solo las tierras del mazo",
+      Precio: "Ver precio total estimado y estadísticas",
       Arquetipo: "Ver análisis estratégico del arquetipo",
       Bracket: "Ver explicación completa del bracket",
       Overall: "Ver diagnóstico de salud del mazo",
@@ -2790,7 +2882,7 @@ export default function DeckAnalysis() {
         </div>
       </div>
 
-      <div className="main-stat-grid" style={{ display: "grid", gridTemplateColumns: "repeat(6, minmax(0, 1fr))", gap: 10, marginBottom: 20 }}>
+      <div className="main-stat-grid" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 10, marginBottom: 20 }}>
         {statCards.map(s => (
           <div key={s.label} className="stat-card-clickable" onClick={() => handleStatCardClick(s.label)} title={getStatCardHint(s.label)} style={{ background: bg.card, border: `1px solid ${s.color}22`, borderRadius: 12, padding: "14px 10px", textAlign: "center", boxShadow: `0 0 20px ${s.color}08`, cursor: "pointer", userSelect: "none" }}>
             <div style={{ fontSize: 22 }}>{s.icon}</div>
@@ -3078,7 +3170,7 @@ export default function DeckAnalysis() {
                         </div>
                       </div>
                       <div style={{ display: "flex", gap: 3, flexWrap: "wrap", marginTop: 5, justifyContent: "center" }}>
-                        {detectRoles(card).slice(0, 2).map(r => <Tag key={r} label={r} color={ROLE_COLORS[r] || "#86efac"} />)}
+                        {getEffectiveRoles(card).slice(0, 2).map(r => <Tag key={r} label={r} color={ROLE_COLORS[r] || "#86efac"} />)}
                       </div>
                     </div>
                   ))}
@@ -3101,6 +3193,11 @@ export default function DeckAnalysis() {
               <div style={{ background: "#071207", border: "1px solid #14532d", borderRadius: 12, padding: 14 }}>
                 <div style={{ color: "#86efac", fontWeight: 900 }}>Avg Mana Value</div>
                 <div style={{ color: "#fff", fontSize: 28, fontFamily: "monospace", fontWeight: 900 }}>{manaStats.avgManaValue}</div>
+              </div>
+              <div style={{ background: "#071207", border: "1px solid #14532d", borderRadius: 12, padding: 14 }}>
+                <div style={{ color: "#86efac", fontWeight: 900 }}>Precio total estimado</div>
+                <div style={{ color: "#facc15", fontSize: 28, fontFamily: "monospace", fontWeight: 900 }}>{formatMoney(totalDeckPrice)}</div>
+                <div style={{ color: "#6b7280", fontSize: 11, marginTop: 4 }}>{pricedCardsCount ? `${pricedCardsCount} cartas con precio Scryfall` : "Cargá Scryfall para calcularlo"}</div>
               </div>
               <div style={{ background: "#071207", border: "1px solid #14532d", borderRadius: 12, padding: 14 }}>
                 <div style={{ color: "#86efac", fontWeight: 900 }}>Tierras</div>
@@ -3568,16 +3665,16 @@ export default function DeckAnalysis() {
           <div style={{ background: bg.card, borderRadius: 12, padding: 20, border: `1px solid ${bg.cardBorder}` }}>
             <h3 style={{ color: "#86efac", marginTop: 0 }}>Cartas que querés meter</h3>
 
-            {autoAddRecommendations.length > 0 && (
+            {visibleAutoAddRecommendations.length > 0 && (
               <div style={{ background: "#071207", border: "1px solid #14532d", borderRadius: 12, padding: 12, marginBottom: 12 }}>
                 <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center", marginBottom: 10 }}>
                   <div>
                     <div style={{ color: "#86efac", fontWeight: 900 }}>Sugerencias automáticas para este mazo</div>
-                    <div style={{ color: "#94a3b8", fontSize: 12, marginTop: 2 }}>Cartas que no tenés y que la app detecta como posibles inclusiones por roles faltantes, arquetipo o combos casi completos.</div>
+                    <div style={{ color: "#94a3b8", fontSize: 12, marginTop: 2 }}>Cartas que no tenés y que la app detecta como posibles inclusiones por roles faltantes, arquetipo o combos casi completos. Filtradas por identidad de color del comandante cuando Scryfall carga el dato.</div>
                   </div>
                 </div>
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))", gap: 10 }}>
-                  {autoAddRecommendations.slice(0, 12).map(suggestion => {
+                  {visibleAutoAddRecommendations.slice(0, 12).map(suggestion => {
                     const data = suggestionCardData[normalizeName(suggestion.name)];
                     return (
                       <button
@@ -3749,7 +3846,7 @@ Mycoloth`}
               {c.image ? <img src={c.image} style={{ width: "100%", borderRadius: 10, display: "block" }} /> : <div style={{ height: 230, borderRadius: 10, background: "#050d05", display: "flex", alignItems: "center", justifyContent: "center", color: "#6b7280", textAlign: "center" }}>Sin imagen<br />Cargá Scryfall</div>}
               <div style={{ marginTop: 8, color: "#fff", fontWeight: 800, fontSize: 13 }}>{c.qty}x {c.name}</div>
               <div style={{ color: "#94a3b8", fontSize: 11 }}>{c.typeLine || c.type}</div>
-              <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginTop: 6 }}>{detectRoles(c).slice(0, 4).map(r => <Tag key={r} label={r} />)}</div>
+              <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginTop: 6 }}>{getEffectiveRoles(c).slice(0, 4).map(r => <Tag key={r} label={r} />)}</div>
             </div>)}
           </div>
         </div>
@@ -3780,7 +3877,7 @@ Mycoloth`}
       )}
 
       <div style={{ textAlign: "center", color: "#31503a", fontSize: 11, marginTop: 20, fontFamily: "monospace", lineHeight: 1.6 }}>
-        COMMANDER DECK ANALYZER · UNIVERSAL · DYNAMIC · v1.4<br />
+        COMMANDER DECK ANALYZER · UNIVERSAL · DYNAMIC · v1.5<br />
         Unofficial fan project. Not affiliated with Wizards of the Coast, Scryfall, EDHREC, Archidekt or Commander Spellbook.
       </div>
     </div>

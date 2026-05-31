@@ -2476,8 +2476,61 @@ export default function DeckAnalysis() {
     { label: "Overall", value: cards.length ? scores.overall : "-", icon: "⭐", color: "#f59e0b", sub: "/ 10 salud del mazo" },
   ];
 
+  function handleStatCardClick(label) {
+    if (!cards.length) {
+      setTab("input");
+      return;
+    }
+    if (label === "Cartas") {
+      clearAllCardFilters();
+      setTab("cards");
+      return;
+    }
+    if (label === "CMC Prom.") {
+      setTab("stats");
+      return;
+    }
+    if (label === "Tierras") {
+      openCardFilter({ kind: "type", value: "Tierras" });
+      return;
+    }
+    if (label === "Arquetipo") {
+      setTab("analysis");
+      return;
+    }
+    if (label === "Bracket") {
+      setTab("bracket");
+      return;
+    }
+    if (label === "Overall") {
+      setTab("analysis");
+      return;
+    }
+  }
+
+  function getStatCardHint(label) {
+    const hints = {
+      Cartas: "Ver galería completa de cartas",
+      "CMC Prom.": "Ver estadísticas detalladas de curva y colores",
+      Tierras: "Ver solo las tierras del mazo",
+      Arquetipo: "Ver análisis estratégico del arquetipo",
+      Bracket: "Ver explicación completa del bracket",
+      Overall: "Ver diagnóstico de salud del mazo",
+    };
+    return hints[label] || "Ver detalle";
+  }
+
   return (
     <div style={{ background: bg.page, color: bg.text, fontFamily: "'Georgia', 'Times New Roman', serif", minHeight: "100vh", padding: "20px 16px" }}>
+      <style>{`
+        .stat-card-clickable { transition: transform .18s ease, border-color .18s ease, box-shadow .18s ease, background .18s ease; }
+        .stat-card-clickable:hover { transform: translateY(-2px); border-color: rgba(34,197,94,.85) !important; box-shadow: 0 0 30px rgba(34,197,94,.16) !important; background: #0f1f0f !important; }
+        .deck-stack-card { transition: transform .18s ease, filter .18s ease; }
+        .deck-stack-card:hover { transform: translateY(-12px) scale(1.035); z-index: 999 !important; filter: drop-shadow(0 0 18px rgba(34,197,94,.34)); }
+        .deck-column-scroll::-webkit-scrollbar { height: 10px; width: 10px; }
+        .deck-column-scroll::-webkit-scrollbar-thumb { background: #14532d; border-radius: 999px; }
+        .deck-column-scroll::-webkit-scrollbar-track { background: #020802; border-radius: 999px; }
+      `}</style>
       <div style={{ background: bg.header, borderRadius: 16, padding: "24px 28px", marginBottom: 20, border: "1px solid #22c55e44", boxShadow: "0 0 60px rgba(34,197,94,0.12), 0 0 0 1px #0a3a0a inset", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 16 }}>
         <div style={{ display: "flex", gap: 16, alignItems: "center", minWidth: 0 }}>
           {commander?.smallImage || commander?.image ? (
@@ -2513,11 +2566,11 @@ export default function DeckAnalysis() {
               {saveStatus && <div style={{ color: "#94a3b8", fontSize: 11, marginTop: 6 }}>{saveStatus}</div>}
             </div>
           )}
-          <div style={{ background: "rgba(0,0,0,0.5)", borderRadius: 14, padding: "14px 24px", textAlign: "center", border: "2px solid #f59e0b55" }}>
+          <div className="stat-card-clickable" onClick={() => handleStatCardClick("Overall")} title="Ver diagnóstico completo del overall" style={{ background: "rgba(0,0,0,0.5)", borderRadius: 14, padding: "14px 24px", textAlign: "center", border: "2px solid #f59e0b55", cursor: "pointer" }}>
             <div style={{ fontSize: 42, fontWeight: 900, color: "#f59e0b", lineHeight: 1, fontFamily: "monospace" }}>{cards.length ? scores.overall : "-"}</div>
             <div style={{ fontSize: 10, color: "#fbbf24", marginTop: 4, letterSpacing: 2, textTransform: "uppercase" }}>Overall /10</div>
           </div>
-          <div style={{ background: "rgba(0,0,0,0.5)", borderRadius: 14, padding: "14px 24px", textAlign: "center", border: "2px solid #22c55e55" }}>
+          <div className="stat-card-clickable" onClick={() => handleStatCardClick("Bracket")} title="Ver explicación completa del bracket" style={{ background: "rgba(0,0,0,0.5)", borderRadius: 14, padding: "14px 24px", textAlign: "center", border: "2px solid #22c55e55", cursor: "pointer" }}>
             <div style={{ fontSize: 42, fontWeight: 900, color: "#4ade80", lineHeight: 1, fontFamily: "monospace" }}>{cards.length ? bracket.bracket : "-"}</div>
             <div style={{ fontSize: 10, color: "#86efac", marginTop: 4, letterSpacing: 2, textTransform: "uppercase" }}>Bracket</div>
           </div>
@@ -2526,11 +2579,12 @@ export default function DeckAnalysis() {
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(6, minmax(0, 1fr))", gap: 10, marginBottom: 20 }}>
         {statCards.map(s => (
-          <div key={s.label} style={{ background: bg.card, border: `1px solid ${s.color}22`, borderRadius: 12, padding: "14px 10px", textAlign: "center", boxShadow: `0 0 20px ${s.color}08` }}>
+          <div key={s.label} className="stat-card-clickable" onClick={() => handleStatCardClick(s.label)} title={getStatCardHint(s.label)} style={{ background: bg.card, border: `1px solid ${s.color}22`, borderRadius: 12, padding: "14px 10px", textAlign: "center", boxShadow: `0 0 20px ${s.color}08`, cursor: "pointer", userSelect: "none" }}>
             <div style={{ fontSize: 22 }}>{s.icon}</div>
             <div style={{ fontSize: 24, fontWeight: 900, color: s.color, lineHeight: 1.2, fontFamily: "monospace" }}>{s.value}</div>
             <div style={{ fontSize: 10, color: bg.muted, marginTop: 3, letterSpacing: 0.5, textTransform: "uppercase" }}>{s.label}</div>
             <div style={{ fontSize: 9, color: "#374151", marginTop: 2 }}>{s.sub}</div>
+            <div style={{ fontSize: 9, color: "#14532d", marginTop: 5, fontWeight: 900 }}>Ver detalle →</div>
           </div>
         ))}
       </div>
@@ -2741,7 +2795,7 @@ export default function DeckAnalysis() {
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap", marginBottom: 14 }}>
             <div>
               <h2 style={{ color: "#fff", margin: 0 }}>🗂️ Vista del deck</h2>
-              <p style={{ color: "#94a3b8", margin: "6px 0 0", fontSize: 13 }}>Vista tipo stacks para revisar el mazo por columnas, roles, costes o colores.</p>
+              <p style={{ color: "#94a3b8", margin: "6px 0 0", fontSize: 13 }}>Vista tipo Archidekt: columnas por rol/tipo/coste/color, cartas apiladas y filtros rápidos.</p>
             </div>
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
               <input
@@ -2769,35 +2823,34 @@ export default function DeckAnalysis() {
             </div>
           </div>
 
-          <div style={{ display: "flex", gap: 12, overflowX: deckViewLayout === "scroll" ? "auto" : "visible", overflowY: "visible", paddingBottom: 14, alignItems: "flex-start", flexWrap: deckViewLayout === "wrap" ? "wrap" : "nowrap", maxWidth: "100%", WebkitOverflowScrolling: "touch" }}>
+          <div className="deck-column-scroll" style={{ display: "flex", gap: 12, overflowX: deckViewLayout === "scroll" ? "auto" : "visible", overflowY: "visible", padding: "4px 4px 18px", alignItems: "flex-start", flexWrap: deckViewLayout === "wrap" ? "wrap" : "nowrap", maxWidth: "100%", WebkitOverflowScrolling: "touch" }}>
             {getDeckViewGroups().map(group => (
-              <div key={group.name} style={{ minWidth: 210, maxWidth: deckViewLayout === "wrap" ? "100%" : 230, background: "#071207", border: "1px solid #14532d", borderRadius: 12, padding: 10, flex: deckViewLayout === "wrap" ? "1 1 230px" : "0 0 210px" }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8, marginBottom: 8 }}>
-                  <div>
-                    <div title={ROLE_DESCRIPTIONS[group.name] || group.name} style={{ color: ROLE_COLORS[group.name] || "#86efac", fontWeight: 900, fontSize: 14, cursor: ROLE_DESCRIPTIONS[group.name] ? "help" : "default" }}>{group.name}</div>
-                    <div style={{ color: "#6b7280", fontSize: 11 }}>Qty: {group.qty}</div>
+              <div key={group.name} style={{ minWidth: 178, maxWidth: deckViewLayout === "wrap" ? 190 : 178, background: "#071207", border: "1px solid #14532d", borderRadius: 12, padding: 9, flex: deckViewLayout === "wrap" ? "1 1 178px" : "0 0 178px", boxShadow: "0 0 18px rgba(34,197,94,0.05)" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8, marginBottom: 7, minHeight: 38 }}>
+                  <div style={{ minWidth: 0 }}>
+                    <div title={ROLE_DESCRIPTIONS[group.name] || group.name} style={{ color: ROLE_COLORS[group.name] || "#86efac", fontWeight: 900, fontSize: 14, cursor: ROLE_DESCRIPTIONS[group.name] ? "help" : "default", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: 115 }}>{group.name}</div>
+                    <div style={{ color: "#6b7280", fontSize: 10 }}>Qty: {group.qty}</div>
                   </div>
-                  <div style={{ color: "#94a3b8", fontSize: 11, textAlign: "right" }}>€{group.price.toFixed(2)}</div>
+                  <div style={{ color: "#94a3b8", fontSize: 10, textAlign: "right", whiteSpace: "nowrap" }}>€{group.price.toFixed(2)}</div>
                 </div>
 
-                <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                  {group.cards.map(card => (
-                    <div key={card.key} title={`${card.qty}x ${card.name}`} style={{ background: "#020802", border: "1px solid #1a2e1a", borderRadius: 10, padding: 7, position: "relative", overflow: "hidden" }}>
-                      <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
-                        <div style={{ width: 62, height: 86, borderRadius: 6, overflow: "hidden", background: "#050d05", flex: "0 0 auto", border: "1px solid #14532d" }}>
-                          {card.smallImage || card.image ? (
-                            <img src={card.smallImage || card.image} alt={card.name} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
-                          ) : (
-                            <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", color: "#6b7280", fontSize: 10, textAlign: "center" }}>Sin imagen</div>
-                          )}
+                <div style={{ position: "relative", minHeight: group.cards.length ? 232 + Math.max(0, group.cards.length - 1) * 42 : 40, paddingBottom: 10 }}>
+                  {group.cards.map((card, idx) => (
+                    <div className="deck-stack-card" key={card.key} title={`${card.qty}x ${card.name} · ${card.manaCost || (card.type === "Tierras" ? "Land" : `MV ${card.cmc ?? "?"}`)}`} style={{ position: "relative", marginTop: idx === 0 ? 0 : -188, zIndex: idx + 1, width: 158, marginLeft: "auto", marginRight: "auto", cursor: "zoom-in" }}>
+                      <div style={{ width: 158, height: 220, borderRadius: 10, overflow: "hidden", background: "#020802", border: "1px solid #14532d", boxShadow: "0 8px 20px rgba(0,0,0,0.45)", position: "relative" }}>
+                        {card.smallImage || card.image ? (
+                          <img src={card.image || card.smallImage} alt={card.name} style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
+                        ) : (
+                          <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", color: "#6b7280", fontSize: 12, textAlign: "center", padding: 12 }}>Sin imagen<br />{card.name}</div>
+                        )}
+                        <div style={{ position: "absolute", top: 5, left: 5, background: "rgba(0,0,0,0.72)", color: "#fff", border: "1px solid rgba(255,255,255,0.18)", borderRadius: 6, padding: "2px 6px", fontSize: 11, fontWeight: 900 }}>{card.qty}</div>
+                        <div style={{ position: "absolute", left: 0, right: 0, bottom: 0, padding: "18px 7px 6px", background: "linear-gradient(0deg, rgba(0,0,0,0.92), rgba(0,0,0,0.62) 55%, transparent)", color: "#fff" }}>
+                          <div style={{ fontSize: 11, fontWeight: 900, lineHeight: 1.15, textShadow: "0 1px 2px #000" }}>{card.name}</div>
+                          <div style={{ color: "#cbd5e1", fontSize: 9, marginTop: 2 }}>{card.manaCost || (card.type === "Tierras" ? "Land" : `MV ${card.cmc ?? "?"}`)}</div>
                         </div>
-                        <div style={{ minWidth: 0, flex: 1 }}>
-                          <div style={{ color: "#fff", fontSize: 12, fontWeight: 800, lineHeight: 1.25 }}>{card.qty}x {card.name}</div>
-                          <div style={{ color: "#94a3b8", fontSize: 10, marginTop: 3 }}>{card.manaCost || (card.type === "Tierras" ? "Land" : `MV ${card.cmc ?? "?"}`)}</div>
-                          <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginTop: 5 }}>
-                            {detectRoles(card).slice(0, 3).map(r => <Tag key={r} label={r} color={ROLE_COLORS[r] || "#86efac"} />)}
-                          </div>
-                        </div>
+                      </div>
+                      <div style={{ display: "flex", gap: 3, flexWrap: "wrap", marginTop: 5, justifyContent: "center" }}>
+                        {detectRoles(card).slice(0, 2).map(r => <Tag key={r} label={r} color={ROLE_COLORS[r] || "#86efac"} />)}
                       </div>
                     </div>
                   ))}

@@ -1,11 +1,11 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer,
   PieChart, Pie, Cell, RadarChart, Radar, PolarGrid, PolarAngleAxis,
 } from "recharts";
 
 /*
-  DeckForge Analyzer v2.2
+  DeckForge Analyzer v2.1
   - Mantiene la UI visual del prototipo original.
   - Arranca vacío.
   - Permite pegar decklist.
@@ -13,8 +13,6 @@ import {
   - Soporta tags manuales [Ramp], [Draw], [Blink], [Goad], etc.
   - Puede enriquecer con Scryfall para mana value, type line, color identity e imágenes.
 */
-
-const APP_VERSION = "v2.2";
 
 const CARD_TYPE_COLORS = {
   Commander: "#22c55e",
@@ -321,10 +319,8 @@ const GENERIC_UPGRADES = {
 
 
 const OFFICIAL_ARCHETYPE_REFERENCE = {
-  macroSource: "Base macro: Wizards usa explícitamente los macroarquetipos Aggro, Midrange, Control y Combo para leer metajuegos y salud de formatos.",
-  themeSource: "Base temática: los temas se detectan por señales mecánicas del mazo: texto Oracle, tipos, roles funcionales, densidad de piezas y habilidad del commander.",
-  commanderSource: "Commander: la habilidad del comandante pesa como dirección de construcción, pero la decklist manda si contradice el plan.",
-  edhrecSource: "EDHREC: preparado como comparación futura. Por ahora no se scrapea ni se inventan datos.",
+  macroSource: "Wizards of the Coast usa de forma recurrente macroarquetipos como Aggro, Midrange, Control y Combo para explicar metajuegos y formatos.",
+  themeSource: "Los temas se detectan por señales mecánicas del mazo: texto Oracle, tipo de carta, roles funcionales y densidad de piezas. EDHREC queda preparado como comparación futura, pero no se inventan datos.",
   macroArchetypes: ["Aggro", "Midrange", "Control", "Combo"],
 };
 
@@ -868,17 +864,12 @@ function estimateCmcFallback(card) {
 
 async function fetchScryfallCard(cardOrName) {
   const card = typeof cardOrName === "string" ? { name: cardOrName } : cardOrName;
-  const rawName = cleanDisplayCardName(card?.name || "").replace(/\s*\/\/.+$/g, "").trim();
   if (card?.setCode && card?.collectorNumber) {
     const exactUrl = `https://api.scryfall.com/cards/${encodeURIComponent(card.setCode)}/${encodeURIComponent(card.collectorNumber)}`;
     const exactRes = await fetch(exactUrl);
     if (exactRes.ok) return exactRes.json();
   }
-  if (!rawName) throw new Error("not found");
-  const exactNamedUrl = `https://api.scryfall.com/cards/named?exact=${encodeURIComponent(rawName)}`;
-  const exactNamedRes = await fetch(exactNamedUrl);
-  if (exactNamedRes.ok) return exactNamedRes.json();
-  const url = `https://api.scryfall.com/cards/named?fuzzy=${encodeURIComponent(rawName)}`;
+  const url = `https://api.scryfall.com/cards/named?fuzzy=${encodeURIComponent(card?.name || "")}`;
   const res = await fetch(url);
   if (!res.ok) throw new Error("not found");
   return res.json();
@@ -1250,17 +1241,11 @@ function detectArchetypes(cards) {
   let confidence = themeScores[0]?.score || 55;
   const negativeTheme = themeScores.find(t => t.name === "-1/-1 Counters");
   const aristocratsTheme = themeScores.find(t => t.name === "Aristocrats");
-  if (negativeTheme && (commanderHint?.mainTheme === "-1/-1 Counters" || commanderFlags.morcant || commanderFlags.hapatra || negativeTheme.score >= Math.max(55, (aristocratsTheme?.score || 0) * 0.78))) {
+  if (negativeTheme && (commanderHint?.mainTheme === "-1/-1 Counters" || negativeTheme.score >= Math.max(55, (aristocratsTheme?.score || 0) * 0.78))) {
     mainTheme = "-1/-1 Counters";
-    confidence = Math.max(negativeTheme.score, commanderFlags.morcant ? 92 : commanderFlags.hapatra ? 90 : commanderHint?.mainTheme === "-1/-1 Counters" ? 86 : negativeTheme.score);
+    confidence = Math.max(negativeTheme.score, commanderHint?.mainTheme === "-1/-1 Counters" ? 84 : negativeTheme.score);
   }
   let subThemes = themeScores.filter(t => t.name !== mainTheme).slice(0, 5).filter(t => t.score >= Math.max(28, confidence * 0.40)).map(t => t.name);
-  if (mainTheme === "-1/-1 Counters") {
-    subThemes = subThemes.filter(t => t !== "Aristocrats" && t !== "Sacrifice");
-    if (roleCount.tokens >= 2 && !subThemes.includes("Tokens")) subThemes.unshift("Tokens");
-    if ((roleCount.drain >= 1 || roleCount.lifegain >= 1) && !subThemes.includes("Lifegain / Drain")) subThemes.push("Lifegain / Drain");
-    subThemes = [...new Set(subThemes)].slice(0, 5);
-  }
 
   const macroScores = [
     { name: "Aggro", score: Math.max(0, creatures * 1.9 + count("Evasion") * 5 + roleCount.voltron * 6 + roleCount.tokens * 2 + (avg > 0 && avg <= 3.0 ? 12 : 0) - roleCount.boardWipe * 4) },
@@ -2257,7 +2242,6 @@ export default function DeckAnalysis() {
   const [selectedDiagnostic, setSelectedDiagnostic] = useState(null);
   const [comboSizeFilter, setComboSizeFilter] = useState("all");
   const [suggestionCardData, setSuggestionCardData] = useState({});
-  const previewFetchInFlight = useRef(new Set());
 
   const commander = useMemo(() => getCommander(cards), [cards]);
   const deckAllowedColors = useMemo(() => getDeckAllowedColors(cards), [cards]);
@@ -2329,7 +2313,6 @@ export default function DeckAnalysis() {
     const hasCommander = !!commander;
     return autoAddRecommendations.filter(suggestion => isSuggestionAllowedForCommander(suggestion.name, suggestionCardData, deckAllowedColors, hasCommander));
   }, [autoAddRecommendations, suggestionCardData, deckAllowedColors, commander]);
-  const allMissingComboNames = useMemo(() => [...new Set(almostCombos.flatMap(combo => combo.missing || []).map(cleanDisplayCardName).filter(Boolean))].slice(0, 60), [almostCombos]);
   const synergyLines = useMemo(() => detectSynergyLines(cards), [cards]);
   const strengths = useMemo(() => generateStrengths(cards), [cards]);
   const weaknesses = useMemo(() => generateWeaknesses(cards), [cards]);
@@ -2433,7 +2416,8 @@ export default function DeckAnalysis() {
   useEffect(() => {
     let cancelled = false;
     async function loadMissingComboImages() {
-      for (const name of allMissingComboNames) {
+      const wanted = [...new Set(displayedCombos.flatMap(combo => combo.pieces || []).filter(name => !findCard(cards, name)).map(cleanDisplayCardName).filter(Boolean))].slice(0, 30);
+      for (const name of wanted) {
         const key = normalizeName(name);
         if (!key || suggestionCardData[key]) continue;
         try {
@@ -2441,14 +2425,14 @@ export default function DeckAnalysis() {
           const scry = scryToCardData(data);
           if (!cancelled) setSuggestionCardData(prev => ({ ...prev, [key]: { name: scry.name || name, image: scry.image, smallImage: scry.smallImage, typeLine: scry.typeLine, manaCost: scry.manaCost, colorIdentity: scry.colorIdentity || [], price: scry.price } }));
         } catch {
-          if (!cancelled) setSuggestionCardData(prev => ({ ...prev, [key]: { name, image: "", smallImage: "", typeLine: "No se encontró en Scryfall", colorIdentity: null, notFound: true } }));
+          if (!cancelled) setSuggestionCardData(prev => ({ ...prev, [key]: { name, image: "", smallImage: "", typeLine: "", colorIdentity: null, notFound: true } }));
         }
-        await sleep(45);
+        await sleep(35);
       }
     }
-    if (allMissingComboNames.length) loadMissingComboImages();
+    if (displayedCombos.length) loadMissingComboImages();
     return () => { cancelled = true; };
-  }, [allMissingComboNames]);
+  }, [displayedCombos, cards]);
 
   async function enrichCardsList(inputCards) {
     if (!inputCards.length) return inputCards;
@@ -2678,14 +2662,8 @@ export default function DeckAnalysis() {
       setPreviewCard({ ...data, name: data.name || name, image: data.image || data.smallImage, qty: data.qty || card.qty || 1 });
       return;
     }
-    if (!key) return;
-    if (data?.notFound) {
-      setPreviewCard({ name, image: "", smallImage: "", qty: card.qty || 1, typeLine: "No se encontró imagen en Scryfall", notFound: true });
-      return;
-    }
+    if (!key || data?.notFound) return;
     setPreviewCard({ name, image: "", smallImage: "", qty: card.qty || 1, typeLine: "Cargando imagen desde Scryfall…", loading: true });
-    if (previewFetchInFlight.current.has(key)) return;
-    previewFetchInFlight.current.add(key);
     try {
       const raw = await fetchScryfallCard(name);
       const scry = scryToCardData(raw);
@@ -2695,8 +2673,6 @@ export default function DeckAnalysis() {
     } catch {
       setSuggestionCardData(prev => ({ ...prev, [key]: { name, image: "", smallImage: "", typeLine: "No se encontró imagen en Scryfall", colorIdentity: null, notFound: true } }));
       setPreviewCard({ name, image: "", smallImage: "", qty: card.qty || 1, typeLine: "No se encontró imagen en Scryfall", notFound: true });
-    } finally {
-      previewFetchInFlight.current.delete(key);
     }
   }
 
@@ -3194,7 +3170,7 @@ export default function DeckAnalysis() {
           <div className="da-topbar-inner" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
             <button onClick={() => setTab("home")} className="da-soft-button" style={{ background: "transparent", color: bg.navText, border: "none", display: "flex", alignItems: "center", gap: 10, cursor: "pointer", fontWeight: 900, fontSize: 18 }}>
               <span style={{ width: 34, height: 34, borderRadius: 12, background: "linear-gradient(135deg,#22c55e,#38bdf8)", display: "inline-flex", alignItems: "center", justifyContent: "center", color: "#061006", boxShadow: "0 0 22px rgba(34,197,94,.28)" }}>✦</span>
-              DeckForge Analyzer <span style={{ fontSize: 10, color: "#86efac", border: "1px solid rgba(34,197,94,.4)", borderRadius: 999, padding: "2px 7px", marginLeft: 2 }}>{APP_VERSION}</span>
+              DeckForge Analyzer
             </button>
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "center" }}>
               {[
@@ -3316,9 +3292,6 @@ export default function DeckAnalysis() {
               <p style={{ color: bg.muted, maxWidth: 760, fontSize: 18, lineHeight: 1.65, margin: 0 }}>
                 Pegá una decklist de Archidekt, Moxfield o Manabox y obtené bracket, overall, combos, tokens, cartas a meter, cortes sugeridos, precio estimado y un reporte compartible.
               </p>
-              <div style={{ marginTop: 14, color: "#86efac", fontWeight: 800, fontSize: 13, letterSpacing: .4 }}>
-                Vista premium · arquetipo explicado · hover global · combos con piezas faltantes visibles
-              </div>
               <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginTop: 24 }}>
                 <button onClick={() => setTab("input")} className="da-soft-button" style={{ background: "linear-gradient(135deg,#16a34a,#22c55e)", color: "#fff", border: "none", borderRadius: 14, padding: "13px 18px", fontWeight: 950, cursor: "pointer", boxShadow: "0 12px 34px rgba(34,197,94,.22)" }}>Analizar deck</button>
                 <button onClick={() => setTab("decks")} className="da-soft-button" style={{ background: bg.panel, color: bg.navText, border: `1px solid ${bg.cardBorder}`, borderRadius: 14, padding: "13px 18px", fontWeight: 950, cursor: "pointer" }}>Ver mis análisis</button>
@@ -3998,7 +3971,7 @@ export default function DeckAnalysis() {
                       >
                         {!isPresent && <div style={{ position: "absolute", top: 6, right: 6, zIndex: 2, background: "#f59e0b", color: "#111827", borderRadius: 999, padding: "2px 6px", fontSize: 9, fontWeight: 900 }}>Falta</div>}
                         <div style={{ height: 176, borderRadius: 9, background: "#020802", display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden" }}>
-                          {image ? <img src={image} alt={piece} style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <div style={{ width: "100%", height: "100%", display: "grid", placeItems: "center", textAlign: "center", padding: 8, fontSize: 12, color: isPresent ? "#86efac" : "#fbbf24", background: isPresent ? "linear-gradient(135deg,#052e16,#020802)" : "linear-gradient(135deg,#3a2a0a,#020802)", border: isPresent ? "1px solid #14532d" : "1px solid #f59e0b66" }}><div><div style={{ fontWeight: 950, marginBottom: 8 }}>{piece}</div><div style={{ fontSize: 10 }}>{isPresent ? "En mazo" : suggestedCard?.notFound ? "Sin imagen Scryfall" : "Cargando versión Scryfall"}</div></div></div>}
+                          {image ? <img src={image} alt={piece} style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <div style={{ color: isPresent ? "#86efac" : "#fbbf24", textAlign: "center", padding: 8, fontSize: 12 }}>{piece}<br />{isPresent ? "En mazo" : "Buscando imagen"}</div>}
                         </div>
                         <div style={{ marginTop: 7, fontWeight: 800, fontSize: 12, color: "#fff", lineHeight: 1.25 }}>{piece}</div>
                         <div style={{ color: isPresent ? "#86efac" : "#fbbf24", fontSize: 10, marginTop: 4 }}>{isPresent ? "Detectada" : "Carta faltante"}</div>
@@ -4069,7 +4042,7 @@ export default function DeckAnalysis() {
           <div style={{ background: bg.card, borderRadius: 16, padding: 22, border: "1px solid #a855f755", gridColumn: "1 / -1" }}>
             <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start", flexWrap: "wrap" }}>
               <div>
-                <div style={{ color: "#c084fc", fontSize: 11, letterSpacing: 3, textTransform: "uppercase", fontFamily: "monospace", marginBottom: 8 }}>Arquetipo v2.2</div>
+                <div style={{ color: "#c084fc", fontSize: 11, letterSpacing: 3, textTransform: "uppercase", fontFamily: "monospace", marginBottom: 8 }}>Arquetipo v2.0</div>
                 <h3 style={{ color: "#fff", margin: 0, fontSize: 24 }}>{archetypes[0]?.macroArchetype || "Sin macroarquetipo"} · {archetypes[0]?.mainTheme || "Sin tema principal"}</h3>
                 <div style={{ color: "#fbbf24", marginTop: 6, fontWeight: 900 }}>Confianza: {archetypes[0]?.confidence || archetypes[0]?.score || 0}%</div>
               </div>
@@ -4086,7 +4059,7 @@ export default function DeckAnalysis() {
                   {(archetypes[0]?.explanation || ["Pegá una decklist para calcular el arquetipo."]).map((x, i) => <p key={i} style={{ color: "#cbd5e1", lineHeight: 1.55, margin: "0 0 8px" }}>• {x}</p>)}
                   <div style={{ color: "#fbbf24", fontSize: 12, marginTop: 10 }}>{archetypes[0]?.edhrecStatus || "Comparación EDHREC: pendiente de integración."}</div>
                   <div style={{ color: "#94a3b8", fontSize: 12, marginTop: 8, lineHeight: 1.45 }}>
-                    Método actual: macroarquetipo basado en Aggro / Midrange / Control / Combo, categorías usadas oficialmente por Wizards para leer formatos. El tema Commander sale de texto Oracle, roles detectados, densidad de cartas y habilidad del comandante. EDHREC queda preparado como comparación externa, pero no se usa hasta tener integración real.
+                    Método actual: macroarquetipo basado en Aggro / Midrange / Control / Combo; tema Commander basado en texto Oracle, roles detectados y densidad de cartas. EDHREC queda preparado como comparación externa, pero no se usa hasta tener integración real.
                   </div>
                 </div>
                 <div style={{ background: "#071207", border: "1px solid #14532d", borderRadius: 12, padding: 14 }}>
@@ -4471,7 +4444,7 @@ Mycoloth`}
       )}
 
       <div style={{ textAlign: "center", color: "#31503a", fontSize: 11, marginTop: 20, fontFamily: "monospace", lineHeight: 1.6 }}>
-        {`DECKFORGE ANALYZER · DASHBOARD · UNIVERSAL · ${APP_VERSION}`}<br />
+        DECKFORGE ANALYZER · DASHBOARD · UNIVERSAL · v2.1<br />
         Deck Analyzer is an unofficial fan project. Not affiliated with Wizards of the Coast, Scryfall, EDHREC, Archidekt, Moxfield, Manabox or Commander Spellbook.
       </div>
       </div>
